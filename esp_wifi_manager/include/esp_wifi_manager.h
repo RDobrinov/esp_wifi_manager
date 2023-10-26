@@ -39,6 +39,7 @@ void wm_init_wifi_connection_data( wm_wifi_connection_data_t *pWifiConn );
 void wm_init_base_config( wm_wifi_base_config_t *base_conf );
 void wm_change_ap_mode_config( wm_wifi_base_config_t *pWifiConn );
 
+esp_err_t wm_set_interface_ip( wifi_interface_t iface, esp_netif_ip_info_t *ip_info);
 esp_err_t wm_init_wifi_manager( wm_wifi_connection_data_t *pInitConfig );
 esp_err_t wm_add_known_network_config( wm_wifi_base_config_t *known_netork );
 esp_err_t wm_add_known_network( char *ssid, char *pwd );
