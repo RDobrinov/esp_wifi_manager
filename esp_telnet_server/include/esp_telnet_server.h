@@ -1,0 +1,4 @@
+#ifndef _ESP_TELNET_SERVER_H_
+#define _ESP_TELNET_SERVER_H_
+
+#endif /* _ESP_TELNET_SERVER_H_ */
