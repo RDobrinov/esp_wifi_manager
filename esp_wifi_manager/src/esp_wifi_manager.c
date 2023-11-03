@@ -29,6 +29,7 @@ typedef struct wm_wifi_mgr_config {
         uint8_t sta_connect_retry;
         TaskHandle_t apTask_handle;
         TaskHandle_t scanTask_handle;
+        esp_event_loop_handle_t uevent_loop;
     } event;
     wifi_ap_record_t found_known_ap;
     wifi_event_sta_disconnected_t blacklistedAPs[WIFIMGR_MAX_KNOWN_AP]; //Not used yet
@@ -42,6 +43,9 @@ static void wm_wifi_event_handler(void* arg, esp_event_base_t event_base, int32_
 static void wm_ip_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);
 static void wm_apply_ap_driver_config();
 static void wm_apply_netif_dns(esp_netif_t *iface, esp_ip4_addr_t *dns_server_ip, esp_netif_dns_type_t type );
+static esp_err_t wm_event_post(int32_t event_id, const void *event_data, size_t event_data_size);
+
+ESP_EVENT_DEFINE_BASE(WM_EVENT);
 
 static void vScanTask(void *pvParameters)
 {
@@ -185,6 +189,7 @@ static void wm_wifi_event_handler(void* arg, esp_event_base_t event_base, int32_
                             ESP_LOGE(ftag, "APSTA failed");   
                         } else { 
                             esp_wifi_set_channel(wm_config->ap.driver_config->ap.channel, WIFI_SECOND_CHAN_NONE);
+                            wm_event_post(WM_EVENT_AP_START, NULL, 0);
                         }
                     }
                 }
@@ -198,15 +203,18 @@ static void wm_wifi_event_handler(void* arg, esp_event_base_t event_base, int32_
         }
 
         if ( event_id == WIFI_EVENT_STA_CONNECTED ) {
-            //ESP_LOGE(ftag, "WIFI_EVENT_STA_CONNECTED");
+            wm_event_post(WM_EVENT_STA_CONNECT, &wm_config->found_known_ap, sizeof(wifi_ap_record_t));
+            /*if(wm_config->event.uevent_loop) {
+
+                if(ESP_OK != esp_event_post_to(wm_config->event.uevent_loop, WM_EVENT, WM_EVENT_STA_CONNECT, &wm_config->found_known_ap, sizeof(wifi_ap_record_t), 0)) {
+                    ESP_LOGI(ftag,"post event error WM_EVENT_STA_CONNECT");
+                }
+            }
+            */
             int i=0;
             while( (strlen((char *)(wm_config->radio.known_networks[i].wifi_ssid)) > 0) && (i < WIFIMGR_MAX_KNOWN_AP) ) {
                 if(strcmp((char *)wm_config->radio.known_networks[i].wifi_ssid, (char *)((wifi_event_sta_connected_t *)(event_data))->ssid) == 0) {
-                    //if(wm_config->radio.known_networks[i].static_ip.ip.addr != IPADDR_ANY ) {
-                        wm_set_interface_ip(WIFI_IF_STA, &wm_config->radio.known_networks[i]);
-                    //} else {
-                    //    wm_set_interface_ip(WIFI_IF_STA, NULL);
-                    //}
+                    wm_set_interface_ip(WIFI_IF_STA, &wm_config->radio.known_networks[i]);
                     i = WIFIMGR_MAX_KNOWN_AP;
                 } else { i++; }
             }
@@ -219,6 +227,7 @@ static void wm_wifi_event_handler(void* arg, esp_event_base_t event_base, int32_
                 wm_config->event.sta_connect_retry++;
             } else {
                 xEventGroupClearBits(wm_config->event.group, WIFIMGR_CONNECTING_BIT | WIFIMGR_CONNECTED_BIT);
+                wm_event_post(WM_EVENT_STA_DISCONNECT, NULL, 0);
             }
         }
     }
@@ -228,11 +237,23 @@ static void wm_ip_event_handler(void* arg, esp_event_base_t event_base, int32_t 
     static const char *ftag = "wifimgr:ipevt";
     if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         wm_config->event.sta_connect_retry = 0;
+        wm_event_post(WM_EVENT_NETIF_GOT_IP, event_data, sizeof(esp_netif_ip_info_t));
+        /*if(wm_config->event.uevent_loop) {
+            if(ESP_OK != esp_event_post_to(wm_config->event.uevent_loop, WM_EVENT, WM_EVENT_NETIF_GOT_IP, event_data, sizeof(esp_netif_ip_info_t), 0)) {
+                ESP_LOGI(ftag,"post event error WM_EVENT_NETIF_GOT_IP");
+            }
+        }*/
         xEventGroupSetBits(wm_config->event.group, WIFIMGR_CONNECTED_BIT);
         xEventGroupClearBits(wm_config->event.group, WIFIMGR_CONNECTING_BIT);
         if(esp_wifi_set_mode(WIFI_MODE_STA) != ESP_OK) {
             ESP_LOGE(ftag, "ip_event_handler STA failed");   
-        }
+        } else { wm_event_post(WM_EVENT_AP_STOP, NULL, 0); }
+       /*     if(wm_config->event.uevent_loop) {
+                if(ESP_OK != esp_event_post_to(wm_config->event.uevent_loop, WM_EVENT, WM_EVENT_AP_STOP, NULL, 0, 0)) {
+                    ESP_LOGI(ftag,"post event error WM_EVENT_AP_STOP");
+                }
+            }
+        }*/
     }
 }
 
@@ -261,6 +282,10 @@ void wm_get_known_networks(wm_wifi_base_config_t *net_list) {
 
 void wm_get_ap_config(wm_wifi_base_config_t *net_list) {
     memcpy(net_list, (char *)&wm_config->radio.ap_mode, sizeof(wm_wifi_base_config_t));    
+}
+
+static esp_err_t wm_event_post(int32_t event_id, const void *event_data, size_t event_data_size) {
+    return (wm_config->event.uevent_loop) ? esp_event_post_to(wm_config->event.uevent_loop, WM_EVENT, event_id, event_data, event_data_size, 0) : ESP_OK;
 }
 
 esp_err_t wm_set_interface_ip( wifi_interface_t iface, wm_wifi_base_config_t *ip_info)
@@ -409,7 +434,8 @@ void wm_set_secondary_dns(esp_ip4_addr_t dns_ip) {
     wm_config->radio.sec_dns_server = dns_ip;
 }
 
-esp_err_t wm_init_wifi_manager(wm_wifi_connection_data_t *pInitConfig) {
+//esp_err_t wm_init_wifi_manager(wm_wifi_connection_data_t *pInitConfig) {
+esp_err_t wm_init_wifi_manager( wm_wifi_connection_data_t *pInitConfig, esp_event_loop_handle_t *p_uevent_loop) {
 
     static const char *ftag = "wifimgr:init";
 
@@ -442,6 +468,8 @@ esp_err_t wm_init_wifi_manager(wm_wifi_connection_data_t *pInitConfig) {
         return ESP_FAIL;
     };
 
+    if(p_uevent_loop != NULL) {wm_config->event.uevent_loop = *p_uevent_loop;}
+
     /* Create default event loop */
     err = esp_event_loop_create_default();
     if( err != ESP_OK ) {
@@ -465,6 +493,11 @@ esp_err_t wm_init_wifi_manager(wm_wifi_connection_data_t *pInitConfig) {
         if( wm_set_interface_ip(WIFI_IF_AP, &wm_config->radio.ap_mode) != ESP_OK ) {
             ESP_LOGE(ftag, "IP Address not changed");
         }
+    }
+    if( wm_config->event.uevent_loop) {
+        esp_netif_ip_info_t *event_data = (esp_netif_ip_info_t *)malloc(sizeof(wifi_init_config_t));
+        esp_netif_get_ip_info( wm_config->ap.iface, event_data);
+        wm_event_post(WM_EVENT_NETIF_GOT_IP, event_data, sizeof(esp_netif_ip_info_t));
     }
     
     /* Init default WIFI configuration*/
@@ -493,7 +526,8 @@ esp_err_t wm_init_wifi_manager(wm_wifi_connection_data_t *pInitConfig) {
         ESP_LOGE(ftag, "wifi_event_handler (%s)", esp_err_to_name(err));
         return err;
     }
-    err = esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wm_ip_event_handler, NULL, NULL);
+    //err = esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wm_ip_event_handler, NULL, NULL);
+    err = esp_event_handler_instance_register(IP_EVENT, ESP_EVENT_ANY_ID, &wm_ip_event_handler, NULL, NULL);
     if( ESP_OK != err) {
         ESP_LOGE(ftag, "ip_event_handler (%s)", esp_err_to_name(err));
         return err;
@@ -523,7 +557,7 @@ esp_err_t wm_init_wifi_manager(wm_wifi_connection_data_t *pInitConfig) {
     if( err != ESP_OK ) {
         ESP_LOGE(ftag, "esp_wifi_start (%s)", esp_err_to_name(err));
         return err;
-    };
+    } else { wm_event_post(WM_EVENT_AP_START, NULL, 0); };
 
     /* TODO: Remove in release
     ESP_LOGI(ftag,"iface %s / %s created", wm_config->ap.iface->if_desc, wm_config->ap.iface->if_key);

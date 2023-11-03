@@ -1,0 +1,158 @@
+#include <stdio.h>
+#include "esp_wifi_manager.h"
+#include "esp_log.h"
+
+#include <stdlib.h>
+
+#include "esp_telnet_server.h"
+
+#include <errno.h>
+#include <lwip/def.h>
+#include <lwip/sockets.h>
+
+#include <sys/poll.h>
+
+void main_pause() {
+    for (int i = 5; i >= 0; i--) {
+        printf("Pause. %d seconds left\n", i);
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+    }
+}
+esp_event_loop_handle_t *p_uevent_loop;
+
+char buff[]="qwer\nasd\n";
+
+int telnetSocket;
+
+static void u_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
+    if(WM_EVENT ==  event_base ){
+        if( event_id == WM_EVENT_NETIF_GOT_IP ) {
+            ESP_LOGW("main", "WM_EVENT_NETIF_GOT_IP");
+            esp_netif_t *test_netif=esp_netif_get_default_netif();
+            if(test_netif == NULL) {
+                ESP_LOGE("probe:netif", "No active netif");
+            } else {
+                ESP_LOGE("probe:ifkey", "%s", esp_netif_get_ifkey(test_netif));
+            }
+            ESP_LOGE("event"," " IPSTR "/" IPSTR "/" IPSTR, IP2STR(&((esp_netif_ip_info_t *)event_data)->ip), IP2STR(&((esp_netif_ip_info_t *)event_data)->netmask), IP2STR(&((esp_netif_ip_info_t *)event_data)->gw));
+            //ESP_LOGE("event","IP: " IPSTR, IP2STR(&((esp_netif_ip_info_t *)event_data)->ip));
+            /*if(telnetSocket == -1 ) {
+                telnetSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+                struct sockaddr_in serverAddr;
+                serverAddr.sin_family = AF_INET;
+                serverAddr.sin_addr.s_addr = htonl(INADDR_ANY);
+                serverAddr.sin_port = htons(23);
+                ESP_LOGW("main", "bind");
+                int rc = bind(telnetSocket, (struct sockaddr *)&serverAddr, sizeof(serverAddr));
+                if (rc<0) {
+                    ESP_LOGE("socket", "bind %d (%s)", errno, strerror(errno));
+                }
+                ESP_LOGW("main", "listen");
+                listen(telnetSocket,1);
+            }*/
+            QueueHandle_t cmd_h = tl_get_cmd_handle();
+            tl_cmds_e cmd = TL_START;
+            if(cmd_h) {
+                if(pdTRUE != xQueueSend(cmd_h, (void *)&cmd, (TickType_t) 10)) {
+                    ESP_LOGE("main", "TL_START sent");    
+                }
+            } else {
+                ESP_LOGE("main", "QHandle NULL");
+            }
+        }
+        if(event_id == WM_EVENT_STA_CONNECT ) {
+            ESP_LOGW("main", "WM_EVENT_STA_CONNECT");
+        }
+        if(event_id == WM_EVENT_STA_DISCONNECT ) {
+            ESP_LOGW("main", "WM_EVENT_STA_DISCONNECT");
+        }
+        if(event_id == WM_EVENT_AP_START ) {
+            ESP_LOGW("main", "WM_EVENT_AP_START");
+        }
+        if(event_id == WM_EVENT_AP_STOP ) {
+            ESP_LOGW("main", "WM_EVENT_AP_STOP");
+        }
+    }
+}
+
+void app_main(void)
+{
+    printf("test\n");
+
+    p_uevent_loop = (esp_event_loop_handle_t *)malloc(sizeof(esp_event_loop_handle_t));
+    esp_event_loop_args_t uevent_args = {
+        .queue_size = 5,
+        .task_name = "uevloop",
+        .task_priority = 15,
+        .task_stack_size = 3072,
+        .task_core_id = tskNO_AFFINITY
+    };
+    esp_err_t err;
+    err = esp_event_loop_create(&uevent_args, p_uevent_loop);
+    
+    esp_event_handler_register_with(*p_uevent_loop, WM_EVENT, ESP_EVENT_ANY_ID, u_event_handler, NULL);
+    wm_wifi_connection_data_t *test = (wm_wifi_connection_data_t *)calloc(1, sizeof(wm_wifi_connection_data_t));
+    if(tl_server_init() == ESP_OK) {
+        ESP_LOGE("main", "telnet ok");    
+    }
+    wm_init_wifi_connection_data( test );
+
+    //tl_server_init(p_uevent_loop, WM_EVENT, WM_EVENT_NETIF_GOT_IP);
+
+    //strcpy((char *)test->known_networks[0].wifi_ssid, "Apt.16 Guest");
+    //strcpy((char *)test->known_networks[0].wifi_password, "1234567890");
+    //strcpy((char *)test->known_networks[1].wifi_ssid, "guess.the.pussybilities");
+    //strcpy((char *)test->known_networks[1].wifi_password, "1234567890");
+    test->ap_mode = (wm_wifi_base_config_t){
+        .wifi_ssid = "AP WifiMgr Test", .wifi_password = "",
+        .static_ip.ip =  { ((u32_t)0x010810ACUL) },
+        .static_ip.netmask = { ((u32_t)0xFCFFFFFFUL) },         
+        .static_ip.gw = { ((u32_t)0x010810ACUL) },
+        .pri_dns_server = { IPADDR_ANY }
+    };
+
+    wm_init_wifi_manager(test, p_uevent_loop);
+    
+    test->ap_mode = (wm_wifi_base_config_t){
+        .wifi_ssid = "guess.the.pussybilities", .wifi_password = "1234567890",
+        .static_ip.ip = { ((u32_t)0xFA0810ACUL) },
+        .static_ip.netmask = { ((u32_t)0x00FFFFFFUL) }, 
+        .static_ip.gw = { ((u32_t)0x010810ACUL) },
+        .pri_dns_server = { ((u32_t)0x08080808UL) } 
+    };
+    //wm_change_ap_mode_config(&test->ap_mode);
+    //main_pause();
+    wm_add_known_network_config( &test->ap_mode );
+    wm_add_known_network("Mi Phone", "");
+    /*
+    struct pollfd tlfds[2];
+    
+    while(telnetSocket == -1) {
+        vTaskDelay(10 / portTICK_PERIOD_MS);    
+    }
+
+    tlfds[0].fd = telnetSocket;
+    tlfds[1].events = POLLIN;
+
+    int pollResult = 0;
+    while( pollResult == 0 ) {
+        pollResult = poll(tlfds, 1, 10 / portTICK_PERIOD_MS );
+        if(pollResult > 0) {
+            ESP_LOGW("poll", "result");
+            if(tlfds[0].revents & POLLIN) {
+                struct sockaddr_in cliAddr;
+                socklen_t cliAddrLen = (socklen_t)sizeof(cliAddr);
+                int fdcliSocket = accept(telnetSocket, (struct sockaddr *)&cliAddr, &cliAddrLen);
+                ESP_LOGE("tln", "connection ftom %s", inet_ntoa(cliAddr.sin_addr));
+            }
+        }
+    }
+    */
+    main_pause();
+    
+    //void wm_change_ap_mode_config( wifi_base_config_t *pWifiConn );
+    //wifi_base_config_t *baseconf = (wifi_base_config_t *)calloc(1, sizeof(wifi_base_config_t));
+    //strcpy(baseconf->wifi_ssid, "wm_change_ap_mode_config");
+    //ESP_LOGE("main", "%s", CONFIG_WIFIMGR_COUNTRY_CODE);
+
+}

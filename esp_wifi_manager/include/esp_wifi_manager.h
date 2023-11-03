@@ -20,6 +20,16 @@
 
 #define WIFIMGR_MAX_KNOWN_AP 5
 
+typedef enum {
+    WM_EVENT_AP_START,
+    WM_EVENT_AP_STOP,
+    WM_EVENT_NETIF_GOT_IP,
+    WM_EVENT_STA_CONNECT,
+    WM_EVENT_STA_DISCONNECT
+} wm_event_t;
+
+ESP_EVENT_DECLARE_BASE(WM_EVENT);
+
 typedef struct wm_wifi_base_config {
     char wifi_ssid[32];
     char wifi_password[64];
@@ -46,7 +56,8 @@ void wm_get_known_networks(wm_wifi_base_config_t *net_list);
 void wm_get_ap_config(wm_wifi_base_config_t *net_list);
 
 esp_err_t wm_set_interface_ip( wifi_interface_t iface, wm_wifi_base_config_t *ip_info);
-esp_err_t wm_init_wifi_manager( wm_wifi_connection_data_t *pInitConfig );
+//esp_err_t wm_init_wifi_manager( wm_wifi_connection_data_t *pInitConfig );
+esp_err_t wm_init_wifi_manager( wm_wifi_connection_data_t *pInitConfig, esp_event_loop_handle_t *p_uevent_loop);
 esp_err_t wm_add_known_network_config( wm_wifi_base_config_t *known_network );
 esp_err_t wm_add_known_network( char *ssid, char *pwd );
 esp_err_t wm_delete_known_network( char *ssid );
