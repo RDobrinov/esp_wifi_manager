@@ -17,6 +17,54 @@
 #include "esp_event.h"
 //#include "freertos/event_groups.h"
 
+#define TS_LM_MODE          1
+#define TS_LM_FORWARDMASK   2
+#define TS_LM_SLC           3
+#define TS_LM_EOF           236
+#define TS_LM_SUPS          237
+#define TS_LM_ABORT         238
+
+#define TS_SLC_SYNCH        1
+#define TS_SLC_BRK          2
+#define TS_SLC_IP           3
+#define TS_SLC_AO           4
+#define TS_SLC_AYT          5
+#define TS_SLC_EOR          6
+#define TS_SLC_ABORT        7
+#define TS_SLC_EOF          8
+#define TS_SLC_SUSP         9
+#define TS_SLC_EC          10
+#define TS_SLC_EL          11
+#define TS_SLC_EW          12
+#define TS_SLC_RP          13
+#define TS_SLC_LNEXT       14
+#define TS_SLC_XON         15
+#define TS_SLC_XOFF        16
+#define TS_SLC_FORW1       17
+#define TS_SLC_FORW2       18
+#define TS_SLC_MCL         19
+#define TS_SLC_MCR         20
+#define TS_SLC_MCWL        21
+#define TS_SLC_MCWR        22
+#define TS_SLC_MCBOL       23
+#define TS_SLC_MCEOL       24
+#define TS_SLC_INSRT       25
+#define TS_SLC_OVER        26
+#define TS_SLC_ECR         27
+#define TS_SLC_EWR         28
+#define TS_SLC_EBOL        29
+#define TS_SLC_EEOL        30
+
+#define TS_SLC_DEFAULT      3
+#define TS_SLC_VALUE        2
+#define TS_SLC_CANTCHANGE   1
+#define TS_SLC_NOSUPPORT    0
+#define TS_SLC_LEVELBITS    3
+
+#define TS_SLC_ACK        128
+#define TS_SLC_FLUSHIN     64
+#define TS_SLC_FLUSHOUT    32
+
 typedef enum {
     TL_START,
     TL_STOP,

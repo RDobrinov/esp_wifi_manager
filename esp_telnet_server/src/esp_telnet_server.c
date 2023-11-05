@@ -1,5 +1,5 @@
 //#include <stdio.h>
-//#include <stdlib.h>
+//#include <unistd.h>
 #include <sys/socket.h>
 #include <sys/poll.h>
 #include "freertos/queue.h"
@@ -9,6 +9,12 @@
 #include <errno.h>
 
 #include "libtelnet.h"
+#include "mem_queue.h"
+
+#define TL_TSK_SOCKET_FD    0
+#define TL_TSK_CLIENT_FD    1
+#define TL_TSK_PIPE_FROM_FD 2
+#define TL_TSK_PIPE_TO_FD   3
 
 typedef struct tl_client {
     int fd;
@@ -21,7 +27,12 @@ typedef struct tl_data {
     TaskHandle_t srv_tsk_handle;
     QueueHandle_t tl_queue;
     tl_queue_data_t *q_cmd;
-    struct pollfd tlfds[3];
+    struct {
+        int from_sock_fd[2];
+        int to_sock_fd[2];
+    } ln_pipes;
+    struct pollfd tlfds[4];
+    char *ttype;
 } tl_data_t;
 
 tl_data_t tl_this;
@@ -32,6 +43,9 @@ void tl_event_handler(telnet_t *thisClient, telnet_event_t *event, void *client)
 
 static const char *get_cmd(unsigned char cmd);
 static const char *get_opt(unsigned char opt);
+static const char *get_slc(unsigned char slc); 
+static const char *get_lm_cmd(unsigned char cmd);
+static const char *get_slc_lvl(unsigned char lvl);
 
 static void vServerTask(void *pvParameters) {
     
@@ -45,7 +59,7 @@ static void vServerTask(void *pvParameters) {
         //{ TELNET_TELOPT_ZMP,       TELNET_WONT, TELNET_DO   },
         //{ TELNET_TELOPT_MSSP,      TELNET_WONT, TELNET_DO   },
         { TELNET_TELOPT_BINARY,    TELNET_WILL, TELNET_DO   },
-        //{ TELNET_TELOPT_NAWS,      TELNET_WILL, TELNET_DO   },
+        { TELNET_TELOPT_NAWS,      TELNET_WILL, TELNET_DO   },
         { -1, 0, 0 }
     };
 
@@ -66,19 +80,19 @@ static void vServerTask(void *pvParameters) {
         if(pd_qmsg == pdTRUE) {
             switch (tl_this.q_cmd->cmd) {
             case TL_START:
-                if(tl_this.tlfds[0].fd == -1) {
+                if(tl_this.tlfds[TL_TSK_SOCKET_FD].fd == -1) {
                     ESP_LOGW(tag, "Server started");
-                    tl_this.tlfds[0].fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+                    tl_this.tlfds[TL_TSK_SOCKET_FD].fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
                     struct sockaddr_in srv_addr;
                     srv_addr.sin_family = AF_INET;
                     srv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
                     srv_addr.sin_port = htons(23);
-                    int op_result = bind(tl_this.tlfds[0].fd, (struct sockaddr *)&srv_addr, sizeof(srv_addr));
+                    int op_result = bind(tl_this.tlfds[TL_TSK_SOCKET_FD].fd, (struct sockaddr *)&srv_addr, sizeof(srv_addr));
                     if(op_result == -1) {
                         ESP_LOGE(tag, "bind %d (%s)", errno, strerror(errno));
                     } else {
-                        tl_this.tlfds[0].events = POLLIN;
-                        op_result = listen(tl_this.tlfds[0].fd, 1);
+                        tl_this.tlfds[TL_TSK_SOCKET_FD].events = POLLIN;
+                        op_result = listen(tl_this.tlfds[TL_TSK_SOCKET_FD].fd, 1);
                         if(op_result == -1) {
                             ESP_LOGE(tag, "listen %d (%s)", errno, strerror(errno));    
                         } else {
@@ -87,8 +101,8 @@ static void vServerTask(void *pvParameters) {
                         }
                     }
                     if(op_result == -1) {
-                        shutdown(tl_this.tlfds[0].fd, 2);
-                        close(tl_this.tlfds[0].fd);
+                        shutdown(tl_this.tlfds[TL_TSK_SOCKET_FD].fd, 2);
+                        close(tl_this.tlfds[TL_TSK_SOCKET_FD].fd);
                     } else {
                         ESP_LOGW(tag, "Server started");
                     }
@@ -100,51 +114,61 @@ static void vServerTask(void *pvParameters) {
             }
         }
 
-        if(tl_this.tlfds[0].fd != -1) {
-            int pollResult = poll(tl_this.tlfds, ((tl_this.tlfds[1].fd != -1) ? 2 : 1), 10 / portTICK_PERIOD_MS );
+        if(tl_this.tlfds[TL_TSK_SOCKET_FD].fd != -1) {
+            int pollResult = poll(tl_this.tlfds, ((tl_this.tlfds[TL_TSK_CLIENT_FD].fd != -1) ? 2 : 1), 10 / portTICK_PERIOD_MS );
             if(pollResult > 0) {
                 ESP_LOGW("poll", "result");
-                if(tl_this.tlfds[0].revents & POLLIN) {
-                    if(tl_this.tlfds[1].fd == -1 ) {
+                if(tl_this.tlfds[TL_TSK_SOCKET_FD].revents & POLLIN) {
+                    if(tl_this.tlfds[TL_TSK_CLIENT_FD].fd == -1 ) {
                         struct tl_udata *udata = (struct tl_udata *)malloc(sizeof(struct tl_udata));
-                        tl_this.tlfds[1].fd = accept(tl_this.tlfds[0].fd, (struct sockaddr *)&cliAddr, &cliAddrLen);
+                        tl_this.tlfds[TL_TSK_CLIENT_FD].fd = accept(tl_this.tlfds[TL_TSK_SOCKET_FD].fd, (struct sockaddr *)&cliAddr, &cliAddrLen);
                         tl_this.handle = telnet_init(cln_opt, tl_event_handler, 0, udata);
+                        tl_this.ttype = NULL;
                         if(tl_this.handle != NULL) {
-                            tl_this.tlfds[1].events = POLLIN;
+                            tl_this.tlfds[TL_TSK_CLIENT_FD].events = POLLIN;
                             tl_this.tl_srv_state = TL_SRV_CLIENT_CONNECTED;
                             ESP_LOGE("tln", "connection from %s", inet_ntoa(cliAddr.sin_addr));
+                            static const unsigned char SEND[] = { TELNET_IAC, TELNET_WILL, TELNET_TELOPT_ECHO };
+                            send(tl_this.tlfds[TL_TSK_CLIENT_FD].fd, (char *)SEND, sizeof(SEND), 0);
                         } else {
-                            int res = write(tl_this.tlfds[1].fd, reject_msg, 1+strlen(reject_msg));
+                            write(tl_this.tlfds[TL_TSK_CLIENT_FD].fd, reject_msg, 1+strlen(reject_msg));
                             ESP_LOGE("tln", "handler error");
-                            shutdown(tl_this.tlfds[1].fd, 2);
-                            close(tl_this.tlfds[1].fd);
+                            shutdown(tl_this.tlfds[TL_TSK_CLIENT_FD].fd, 2);
+                            close(tl_this.tlfds[TL_TSK_CLIENT_FD].fd);
+                            tl_this.ttype = NULL;
                         }
                         
                     } else {
-                        int fd_drop = accept(tl_this.tlfds[0].fd, (struct sockaddr *)&cliAddr, &cliAddrLen);
-                        int res = write(fd_drop, reject_msg, 1+strlen(reject_msg));
+                        int fd_drop = accept(tl_this.tlfds[TL_TSK_SOCKET_FD].fd, (struct sockaddr *)&cliAddr, &cliAddrLen);
+                        write(fd_drop, reject_msg, 1+strlen(reject_msg));
                         ESP_LOGE("tln", "connection ftom %s rejected", inet_ntoa(cliAddr.sin_addr));
                         shutdown(fd_drop,2);
                         close(fd_drop);
                     }
                 }
-                if(tl_this.tlfds[1].fd != -1 ) {
-                    if(tl_this.tlfds[1].revents & POLLIN) {
-                        ssize_t len = recv(tl_this.tlfds[1].fd, (char *)recv_data, sizeof(recv_data), 0);
+                if(tl_this.tlfds[TL_TSK_CLIENT_FD].fd != -1 ) {
+                    if(tl_this.tlfds[TL_TSK_CLIENT_FD].revents & POLLIN) {
+                        ssize_t len = recv(tl_this.tlfds[TL_TSK_CLIENT_FD].fd, (char *)recv_data, sizeof(recv_data), 0);
                         if( len == 0 ) {
                             telnet_free(tl_this.handle);
                             ESP_LOGW(tag, "Handler destroyed");
-                            shutdown(tl_this.tlfds[1].fd, 2);
-                            close(tl_this.tlfds[1].fd);
-                            tl_this.tlfds[1].fd = -1;
+                            shutdown(tl_this.tlfds[TL_TSK_CLIENT_FD].fd, 2);
+                            close(tl_this.tlfds[TL_TSK_CLIENT_FD].fd);
+                            tl_this.tlfds[TL_TSK_CLIENT_FD].fd = -1;
+                            tl_this.ttype = NULL;
                             ESP_LOGW(tag, "Client disconnected");
                         } else {
                             //recv_data[len] = 0x00;
                             //ESP_LOGW(tag, "%s" ,recv_data);
                             for(int i=0; i<len; i++){
                                 if(recv_data[i] == TELNET_IAC) {
-                                   ESP_LOGI("loop", "%s %s %s", get_cmd(recv_data[i]), get_cmd(recv_data[i+1]), get_opt(recv_data[i+2]));
-                                   i += 2; 
+                                    if(recv_data[i+1] != TELNET_SE ) { 
+                                        ESP_LOGI("loop", "%s %s %s", get_cmd(recv_data[i]), get_cmd(recv_data[i+1]), get_opt(recv_data[i+2]));
+                                        i += 2;
+                                    } else {
+                                        ESP_LOGI("loop", "%s %s", get_cmd(recv_data[i]), get_cmd(recv_data[i+1]));
+                                        i +=1;
+                                    } 
                                 } else { printf("%03d ", recv_data[i]); }
                             }
                             printf("\n");
@@ -237,6 +261,64 @@ static const char *get_opt(unsigned char opt) {
 	default: return "unknown";
 	}
 }
+
+static const char *get_slc(unsigned char slc) 
+{
+    switch(slc) {
+        case 1: return "SLC_SYNCH";
+        case 2: return "SLC_BRK";
+        case 3: return "SLC_IP";
+        case 4: return "SLC_AO";
+        case 5: return "SLC_AYT";
+        case 6: return "SLC_EOR";
+        case 7: return "SLC_ABORT";
+        case 8: return "SLC_EOF";
+        case 9: return "SLC_SUSP";
+        case 10: return "SLC_EC";
+        case 11: return "SLC_EL";
+        case 12: return "SLC_EW";
+        case 13: return "SLC_RP";
+        case 14: return "SLC_LNEXT";
+        case 15: return "SLC_XON";
+        case 16: return "SLC_XOFF";
+        case 17: return "SLC_FORW1";
+        case 18: return "SLC_FORW2";
+        case 19: return "SLC_MCL";
+        case 20: return "SLC_MCR";
+        case 21: return "SLC_MCWL";
+        case 22: return "SLC_MCWR";
+        case 23: return "SLC_MCBOL";
+        case 24: return "SLC_MCEOL";
+        case 25: return "SLC_INSRT";
+        case 26: return "SLC_OVER";
+        case 27: return "SLC_ECR";
+        case 28: return "SLC_EWR";
+        case 29: return "SLC_EBOL";
+        case 30: return "SLC_EEOL";
+        default: return "unknown";
+    }
+}
+
+static const char *get_lm_cmd(unsigned char cmd) {
+    switch(cmd) {
+        case 1: return "MODE";
+        case 2: return "FORWARDMASK";
+        case 3: return "SLC";
+        case 236: return "EOF";
+        case 237: return "SUPS";
+        case 238: return "ABORT";
+        default: return "unknown";
+    }
+}
+static const char *get_slc_lvl(unsigned char lvl) {
+    switch(lvl & TS_SLC_LEVELBITS) {
+        case 3: return "SLC_DEFAULT";
+        case 2: return "SLC_VALUE";
+        case 1: return "SLC_CANTCHANGE";
+        case 0: return "SLC_NOSUPPORT";
+        default: return "unknown";
+    }
+}
 /* end Helper*/
 
 void tl_event_handler(telnet_t *thisClient, telnet_event_t *event, void *client) {
@@ -248,7 +330,7 @@ void tl_event_handler(telnet_t *thisClient, telnet_event_t *event, void *client)
                 printf("%03d ", event->data.buffer[i]);
             }*/
             ESP_LOGI("tlev:send", "%s %s %s", get_cmd(event->data.buffer[0]), get_cmd(event->data.buffer[1]), get_opt(event->data.buffer[2]));
-            send(tl_this.tlfds[1].fd, event->data.buffer, event->data.size, 0);
+            send(tl_this.tlfds[TL_TSK_CLIENT_FD].fd, event->data.buffer, event->data.size, 0);
             break;
         case TELNET_EV_DATA:
             ESP_LOGE("evth", "Received %.*s", event->data.size, event->data.buffer);
@@ -259,28 +341,58 @@ void tl_event_handler(telnet_t *thisClient, telnet_event_t *event, void *client)
         case TELNET_EV_WILL:
             ESP_LOGE("evth", "TELNET_EV_WILL");
             ESP_LOGI("tlev:will", "%d (%s)", event->neg.telopt, get_opt(event->neg.telopt));
+            switch(event->neg.telopt) {
+                case TELNET_TELOPT_TTYPE:
+                    telnet_ttype_send(thisClient);
+                    break;
+
+                default:
+                    break;
+            }
             break;
         case TELNET_EV_WONT:
             ESP_LOGE("evth", "TELNET_EV_WONT");
             break;
         case TELNET_EV_DO:
             ESP_LOGE("evth", "TELNET_EV_DO");
+            ESP_LOGI("tlev:do", "%d (%s)", event->neg.telopt, get_opt(event->neg.telopt));
             break;
         case TELNET_EV_DONT:
             ESP_LOGE("evth", "TELNET_EV_DONT");
             break;
         case TELNET_EV_SUBNEGOTIATION:
-            ESP_LOGE("evth", "TELNET_EV_SUBNEGOTIATION");
+            ESP_LOGE("evth", "TELNET_EV_SUBNEGOTIATION [%s]", get_opt(event->sub.telopt));
             switch (event->sub.telopt) {
-            case TELNET_TELOPT_ENVIRON:
-            case TELNET_TELOPT_NEW_ENVIRON:
-            case TELNET_TELOPT_TTYPE:
-            case TELNET_TELOPT_ZMP:
-            case TELNET_TELOPT_MSSP:
-
-            default:
-                break;
+                case TELNET_TELOPT_ENVIRON:
+                case TELNET_TELOPT_NEW_ENVIRON:
+                case TELNET_TELOPT_TTYPE:
+                    //tl_this.ttype = (char *)calloc(1,strlen(event->ttype.name)+1);
+                    //strcpy(tl_this.ttype, event->ttype.name);
+                    //tl_this.ttype = (char *)calloc(1, 1+(event->sub.size));
+                    //memcpy(tl_this.ttype, event->sub.buffer, event->sub.size);
+                    //ESP_LOGI("evt:rcv", "(%d) %d", event->ttype.cmd, event->ttype._type);
+                    break;
+                case TELNET_TELOPT_ZMP:
+                case TELNET_TELOPT_MSSP:
+                case TELNET_TELOPT_LINEMODE:
+                    ESP_LOGI("sub:lm", "%s", get_lm_cmd(event->data.buffer[0]));
+                    for(int i=1; i<event->data.size; i+=3) {
+                        ESP_LOGI("sub:lm", "%s %s %d", get_slc(event->data.buffer[i]), get_slc_lvl(event->data.buffer[i+1]), event->data.buffer[i+2]);
+                    }
+                    ESP_LOGI("evop", "%d", event->data.size);
+                    break;
+            
+                default:
+                    break;
             }
+            break;
+        case TELNET_EV_TTYPE:
+            ESP_LOGE("evth", "TELNET_EV_TTYPE");
+            tl_this.ttype = (char *)calloc(1,strlen(event->ttype.name)+1);
+            strcpy(tl_this.ttype, event->ttype.name);
+            ESP_LOGI("evt:tty", "(%s) %d", tl_this.ttype, event->ttype.cmd);
+            break;
+
         default:
             break;  
     }
@@ -291,8 +403,8 @@ esp_err_t tl_server_init() {
 
     const char *tag = "tls:init";
 
-    tl_this.tlfds[0].fd = -1;
-    tl_this.tlfds[1].fd = -1;
+    tl_this.tlfds[TL_TSK_SOCKET_FD].fd = -1;
+    tl_this.tlfds[TL_TSK_CLIENT_FD].fd = -1;
     tl_this.tl_srv_state = TL_SRV_NOACT;
 
     tl_this.tl_queue = xQueueCreate(5, sizeof(tl_queue_data_t));
@@ -301,6 +413,9 @@ esp_err_t tl_server_init() {
         ESP_LOGE(tag, "Queue");
         return ESP_FAIL;
     }
+    //pipe(tl_this.ln_pipes.from_sock_fd);
+    //pipe(tl_this.ln_pipes.to_sock_fd);
+
     xTaskCreate(vServerTask, "tlnsrv", 4096, NULL, 15, &tl_this.srv_tsk_handle);
     return ESP_OK;
 }

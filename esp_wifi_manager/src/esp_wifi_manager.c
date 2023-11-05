@@ -237,7 +237,7 @@ static void wm_ip_event_handler(void* arg, esp_event_base_t event_base, int32_t 
     static const char *ftag = "wifimgr:ipevt";
     if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         wm_config->event.sta_connect_retry = 0;
-        wm_event_post(WM_EVENT_NETIF_GOT_IP, event_data, sizeof(esp_netif_ip_info_t));
+        wm_event_post(WM_EVENT_NETIF_GOT_IP, (void *)&(((ip_event_got_ip_t *)event_data)->ip_info), sizeof(esp_netif_ip_info_t));
         /*if(wm_config->event.uevent_loop) {
             if(ESP_OK != esp_event_post_to(wm_config->event.uevent_loop, WM_EVENT, WM_EVENT_NETIF_GOT_IP, event_data, sizeof(esp_netif_ip_info_t), 0)) {
                 ESP_LOGI(ftag,"post event error WM_EVENT_NETIF_GOT_IP");
