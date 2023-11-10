@@ -18,7 +18,7 @@
 #include <string.h>
 #include <stdarg.h>
 
-#include "esp_log.h"
+//#include "esp_log.h"
 
 /* Win32 compatibility */
 #if defined(_WIN32)
@@ -456,7 +456,6 @@ static void _negotiate(telnet_t *telnet, unsigned char telopt) {
 				NEGOTIATE_EVENT(telnet, TELNET_EV_DO, telopt);
 			} else
 				_send_negotiate(telnet, TELNET_WONT, telopt);
-			ESP_LOGW("_neg", "Q_NO");
 			break;
 		case Q_WANTNO:
 			_set_rfc1143(telnet, telopt, Q_NO, Q_HIM(q));

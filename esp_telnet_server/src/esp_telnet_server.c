@@ -15,6 +15,27 @@
 #define TL_TSK_PIPE_FROM_FD 2
 #define TL_TSK_PIPE_TO_FD   3
 
+/* Linenoise state used by tl_data */
+#define LN_MAX_LINE_SIZE    1024
+
+struct linenoiseState {
+    int in_completion;  /* The user pressed TAB and we are now in completion
+                         * mode, so input is handled by completeLine(). */
+    size_t completion_idx; /* Index of next completion to propose. */
+    //int ifd;            /* Terminal stdin file descriptor. */
+    //int ofd;            /* Terminal stdout file descriptor. */
+    char *buf;          /* Edited line buffer. */
+    size_t buflen;      /* Edited line buffer size. */
+    const char *prompt; /* Prompt to display. */
+    size_t plen;        /* Prompt length. */
+    size_t pos;         /* Current cursor position. */
+    size_t oldpos;      /* Previous refresh cursor position. */
+    size_t len;         /* Current edited line length. */
+    size_t cols;        /* Number of columns in terminal. */
+    size_t oldrows;     /* Rows used by last refrehsed line (multiline mode) */
+    int history_index;  /* The history index we are currently editing. */
+};
+
 /* Telnet */
 typedef struct tl_client {
     int fd;
@@ -31,6 +52,9 @@ typedef struct tl_data {
         char *ttype;
         int rows;
         int cols;
+        struct linenoiseState *ls;
+        char *line;
+        char *ln_line;
     } tty;
     struct pollfd tlfds[2];
 } tl_data_t;
@@ -67,470 +91,41 @@ typedef struct mem_queue_storage {
 
 static mem_queue_storage_t *mem_queue = NULL;
 
-static void vServerTask(void *pvParameters) {
-    
-    const char *tag = "tl:task";
-    const telnet_telopt_t cln_opt[] = {
-        { TELNET_TELOPT_ECHO,      TELNET_WILL, TELNET_DONT },
-        { TELNET_TELOPT_SGA,       TELNET_WILL, TELNET_DO   },
-        { TELNET_TELOPT_TTYPE,     TELNET_WILL, TELNET_DO   },
-        { TELNET_TELOPT_LINEMODE,  TELNET_WILL, TELNET_DO   },
-        //{ TELNET_TELOPT_COMPRESS2, TELNET_WONT, TELNET_DO   },
-        //{ TELNET_TELOPT_ZMP,       TELNET_WONT, TELNET_DO   },
-        //{ TELNET_TELOPT_MSSP,      TELNET_WONT, TELNET_DO   },
-        { TELNET_TELOPT_BINARY,    TELNET_WILL, TELNET_DO   },
-        { TELNET_TELOPT_NAWS,      TELNET_WILL, TELNET_DO   },
-        { -1, 0, 0 }
-    };
+/* Linenoise component */
 
-    struct tl_udata {
-        int sockfd;
-    };
+//extern char *linenoiseEditMore;
+char *linenoiseEditMore = "Static pointer to linenoiseEditMore";
 
-    struct sockaddr_in cliAddr;
-    socklen_t cliAddrLen = (socklen_t)sizeof(cliAddr);
-    uint8_t recv_data[1024];
+/* The linenoiseState structure represents the state during line editing.
+ * We pass this state to functions implementing specific editing
+ * functionalities. */
 
-    char *reject_msg = "\nToo many connections\n\n";
+typedef struct linenoiseCompletions {
+  size_t len;
+  char **cvec;
+} linenoiseCompletions;
 
-    ESP_LOGI(tag, "vServerTask");
+/* Completion API. */
+typedef void(linenoiseCompletionCallback)(const char *, linenoiseCompletions *);
+typedef char*(linenoiseHintsCallback)(const char *, int *color, int *bold);
+typedef void(linenoiseFreeHintsCallback)(void *);
 
-    while(true) {
-        BaseType_t pd_qmsg = xQueueReceive(tl_this.tl_queue, (void *)tl_this.q_cmd, (TickType_t) 10 );
-        if(pd_qmsg == pdTRUE) {
-            switch (tl_this.q_cmd->cmd) {
-            case TL_START:
-                if(tl_this.tlfds[TL_TSK_SOCKET_FD].fd == -1) {
-                    ESP_LOGW(tag, "Server started");
-                    tl_this.tlfds[TL_TSK_SOCKET_FD].fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-                    struct sockaddr_in srv_addr;
-                    srv_addr.sin_family = AF_INET;
-                    srv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-                    srv_addr.sin_port = htons(23);
-                    int op_result = bind(tl_this.tlfds[TL_TSK_SOCKET_FD].fd, (struct sockaddr *)&srv_addr, sizeof(srv_addr));
-                    if(op_result == -1) {
-                        ESP_LOGE(tag, "bind %d (%s)", errno, strerror(errno));
-                    } else {
-                        tl_this.tlfds[TL_TSK_SOCKET_FD].events = POLLIN;
-                        op_result = listen(tl_this.tlfds[TL_TSK_SOCKET_FD].fd, 1);
-                        if(op_result == -1) {
-                            ESP_LOGE(tag, "listen %d (%s)", errno, strerror(errno));    
-                        } else {
-                            tl_this.tl_srv_state = TL_SRV_LISTEN; 
-                            break;
-                        }
-                    }
-                    if(op_result == -1) {
-                        shutdown(tl_this.tlfds[TL_TSK_SOCKET_FD].fd, 2);
-                        close(tl_this.tlfds[TL_TSK_SOCKET_FD].fd);
-                    } else {
-                        ESP_LOGW(tag, "Server started");
-                    }
-                }
-                break;
-            
-            default:
-                break;
-            }
-        }
+/* Non blocking API. */
+//int linenoiseEditStart(struct linenoiseState *l, int stdin_fd, int stdout_fd, char *buf, size_t buflen, const char *prompt);
+int linenoiseEditStart(struct linenoiseState *l, char *buf, size_t buflen, const char *prompt);
+char *linenoiseEditFeed(struct linenoiseState *l);
+void linenoiseEditStop(struct linenoiseState *l);
+void linenoiseHide(struct linenoiseState *l);
+void linenoiseShow(struct linenoiseState *l);
+void linenoiseFree(void *ptr);
 
-        if(tl_this.tlfds[TL_TSK_SOCKET_FD].fd != -1) {
-            int pollResult = poll(tl_this.tlfds, ((tl_this.tlfds[TL_TSK_CLIENT_FD].fd != -1) ? 2 : 1), 10 / portTICK_PERIOD_MS );
-            if(pollResult > 0) {
-                ESP_LOGW("poll", "result");
-                if(tl_this.tlfds[TL_TSK_SOCKET_FD].revents & POLLIN) {
-                    if(tl_this.tlfds[TL_TSK_CLIENT_FD].fd == -1 ) {
-                        struct tl_udata *udata = (struct tl_udata *)malloc(sizeof(struct tl_udata));
-                        tl_this.tlfds[TL_TSK_CLIENT_FD].fd = accept(tl_this.tlfds[TL_TSK_SOCKET_FD].fd, (struct sockaddr *)&cliAddr, &cliAddrLen);
-                        tl_this.handle = telnet_init(cln_opt, tl_event_handler, 0, udata);
-                        tl_this.tty.ttype = NULL;
-                        if(tl_this.handle != NULL) {
-                            tl_this.tlfds[TL_TSK_CLIENT_FD].events = POLLIN;
-                            tl_this.tl_srv_state = TL_SRV_CLIENT_CONNECTED;
-                            ESP_LOGE("tln", "connection from %s", inet_ntoa(cliAddr.sin_addr));
-                            static const unsigned char SEND[] = { TELNET_IAC, TELNET_WILL, TELNET_TELOPT_ECHO };
-                            send(tl_this.tlfds[TL_TSK_CLIENT_FD].fd, (char *)SEND, sizeof(SEND), 0);
-                            /* linenoise */
-                            
-                            /* end */
-                        } else {
-                            write(tl_this.tlfds[TL_TSK_CLIENT_FD].fd, reject_msg, 1+strlen(reject_msg));
-                            ESP_LOGE("tln", "handler error");
-                            shutdown(tl_this.tlfds[TL_TSK_CLIENT_FD].fd, 2);
-                            close(tl_this.tlfds[TL_TSK_CLIENT_FD].fd);
-                            tl_this.tty.ttype = NULL;
-                        }
-                        
-                    } else {
-                        int fd_drop = accept(tl_this.tlfds[TL_TSK_SOCKET_FD].fd, (struct sockaddr *)&cliAddr, &cliAddrLen);
-                        write(fd_drop, reject_msg, 1+strlen(reject_msg));
-                        ESP_LOGE("tln", "connection ftom %s rejected", inet_ntoa(cliAddr.sin_addr));
-                        shutdown(fd_drop,2);
-                        close(fd_drop);
-                    }
-                }
-                if(tl_this.tlfds[TL_TSK_CLIENT_FD].fd != -1 ) {
-                    if(tl_this.tlfds[TL_TSK_CLIENT_FD].revents & POLLIN) {
-                        ssize_t len = recv(tl_this.tlfds[TL_TSK_CLIENT_FD].fd, (char *)recv_data, sizeof(recv_data), 0);
-                        if( len == 0 ) {
-                            telnet_free(tl_this.handle);
-                            ESP_LOGW(tag, "Handler destroyed");
-                            shutdown(tl_this.tlfds[TL_TSK_CLIENT_FD].fd, 2);
-                            close(tl_this.tlfds[TL_TSK_CLIENT_FD].fd);
-                            tl_this.tlfds[TL_TSK_CLIENT_FD].fd = -1;
-                            tl_this.tty.ttype = NULL;
-                            ESP_LOGW(tag, "Client disconnected");
-                        } else {
-                            //recv_data[len] = 0x00;
-                            //ESP_LOGW(tag, "%s" ,recv_data);
-                            for(int i=0; i<len; i++){
-                                if(recv_data[i] == TELNET_IAC) {
-                                    if(recv_data[i+1] != TELNET_SE ) { 
-                                        ESP_LOGI("loop", "%s %s %s", get_cmd(recv_data[i]), get_cmd(recv_data[i+1]), get_opt(recv_data[i+2]));
-                                        i += 2;
-                                    } else {
-                                        ESP_LOGI("loop", "%s %s", get_cmd(recv_data[i]), get_cmd(recv_data[i+1]));
-                                        i +=1;
-                                    } 
-                                } else { printf("%03d ", recv_data[i]); }
-                            }
-                            printf("\n");
-                            telnet_recv(tl_this.handle, (char *)recv_data, len);
-                        }
-                    }
-                }
-            }
-            if(tl_this.tlfds[TL_TSK_CLIENT_FD].fd != -1) {
-                if(!mem_queue_isempty()) {
-                    ESP_LOGE("187", "%s", (!mem_queue_isempty()) ? "Data waiting" : "empty");
-                    char *buf = (char *)malloc(MEM_QUEUE_SIZE);
-                    int count = mem_queue_get(buf, MEM_QUEUE_SIZE-1);
-                    ESP_LOGI("loop", "%d bytes received from mem_queue", count);
-                    free(buf);
-                }
-            }
-        }
-    }    
-}
-/* Helper */
-static const char *get_cmd(unsigned char cmd) {
-	static char buffer[4];
+/* Other utilities. */
+void linenoiseClearScreen(void);
+void linenoiseSetMultiLine(int ml);
+void linenoisePrintKeyCodes(void);
+void linenoiseMaskModeEnable(void);
+void linenoiseMaskModeDisable(void);
 
-	switch (cmd) {
-	case 255: return "IAC";
-	case 254: return "DONT";
-	case 253: return "DO";
-	case 252: return "WONT";
-	case 251: return "WILL";
-	case 250: return "SB";
-	case 249: return "GA";
-	case 248: return "EL";
-	case 247: return "EC";
-	case 246: return "AYT";
-	case 245: return "AO";
-	case 244: return "IP";
-	case 243: return "BREAK";
-	case 242: return "DM";
-	case 241: return "NOP";
-	case 240: return "SE";
-	case 239: return "EOR";
-	case 238: return "ABORT";
-	case 237: return "SUSP";
-	case 236: return "xEOF";
-	default:
-		snprintf(buffer, sizeof(buffer), "%d", (int)cmd);
-		return buffer;
-	}
-}
-
-static const char *get_opt(unsigned char opt) {
-	switch (opt) {
-	case 0: return "BINARY";
-	case 1: return "ECHO";
-	case 2: return "RCP";
-	case 3: return "SGA";
-	case 4: return "NAMS";
-	case 5: return "STATUS";
-	case 6: return "TM";
-	case 7: return "RCTE";
-	case 8: return "NAOL";
-	case 9: return "NAOP";
-	case 10: return "NAOCRD";
-	case 11: return "NAOHTS";
-	case 12: return "NAOHTD";
-	case 13: return "NAOFFD";
-	case 14: return "NAOVTS";
-	case 15: return "NAOVTD";
-	case 16: return "NAOLFD";
-	case 17: return "XASCII";
-	case 18: return "LOGOUT";
-	case 19: return "BM";
-	case 20: return "DET";
-	case 21: return "SUPDUP";
-	case 22: return "SUPDUPOUTPUT";
-	case 23: return "SNDLOC";
-	case 24: return "TTYPE";
-	case 25: return "EOR";
-	case 26: return "TUID";
-	case 27: return "OUTMRK";
-	case 28: return "TTYLOC";
-	case 29: return "3270REGIME";
-	case 30: return "X3PAD";
-	case 31: return "NAWS";
-	case 32: return "TSPEED";
-	case 33: return "LFLOW";
-	case 34: return "LINEMODE";
-	case 35: return "XDISPLOC";
-	case 36: return "ENVIRON";
-	case 37: return "AUTHENTICATION";
-	case 38: return "ENCRYPT";
-	case 39: return "NEW-ENVIRON";
-	case 70: return "MSSP";
-	case 85: return "COMPRESS";
-	case 86: return "COMPRESS2";
-	case 93: return "ZMP";
-	case 255: return "EXOPL";
-	default: return "unknown";
-	}
-}
-
-static const char *get_slc(unsigned char slc) 
-{
-    switch(slc) {
-        case 1: return "SLC_SYNCH";
-        case 2: return "SLC_BRK";
-        case 3: return "SLC_IP";
-        case 4: return "SLC_AO";
-        case 5: return "SLC_AYT";
-        case 6: return "SLC_EOR";
-        case 7: return "SLC_ABORT";
-        case 8: return "SLC_EOF";
-        case 9: return "SLC_SUSP";
-        case 10: return "SLC_EC";
-        case 11: return "SLC_EL";
-        case 12: return "SLC_EW";
-        case 13: return "SLC_RP";
-        case 14: return "SLC_LNEXT";
-        case 15: return "SLC_XON";
-        case 16: return "SLC_XOFF";
-        case 17: return "SLC_FORW1";
-        case 18: return "SLC_FORW2";
-        case 19: return "SLC_MCL";
-        case 20: return "SLC_MCR";
-        case 21: return "SLC_MCWL";
-        case 22: return "SLC_MCWR";
-        case 23: return "SLC_MCBOL";
-        case 24: return "SLC_MCEOL";
-        case 25: return "SLC_INSRT";
-        case 26: return "SLC_OVER";
-        case 27: return "SLC_ECR";
-        case 28: return "SLC_EWR";
-        case 29: return "SLC_EBOL";
-        case 30: return "SLC_EEOL";
-        default: return "unknown";
-    }
-}
-
-static const char *get_lm_cmd(unsigned char cmd) {
-    switch(cmd) {
-        case 1: return "MODE";
-        case 2: return "FORWARDMASK";
-        case 3: return "SLC";
-        case 236: return "EOF";
-        case 237: return "SUPS";
-        case 238: return "ABORT";
-        default: return "unknown";
-    }
-}
-static const char *get_slc_lvl(unsigned char lvl) {
-    switch(lvl & TS_SLC_LEVELBITS) {
-        case 3: return "SLC_DEFAULT";
-        case 2: return "SLC_VALUE";
-        case 1: return "SLC_CANTCHANGE";
-        case 0: return "SLC_NOSUPPORT";
-        default: return "unknown";
-    }
-}
-/* end Helper*/
-
-void tl_event_handler(telnet_t *thisClient, telnet_event_t *event, void *client) {
-    //ESP_LOGE("tl:evth", "data to send 0x%02X", event->type);
-    switch(event->type) {
-        case TELNET_EV_SEND:
-            ESP_LOGE("evth", "TELNET_EV_SEND");
-            /*for(int i=0; i<event->data.size; i++){
-                printf("%03d ", event->data.buffer[i]);
-            }*/
-            ESP_LOGI("tlev:send", "%s %s %s", get_cmd(event->data.buffer[0]), get_cmd(event->data.buffer[1]), get_opt(event->data.buffer[2]));
-            send(tl_this.tlfds[TL_TSK_CLIENT_FD].fd, event->data.buffer, event->data.size, 0);
-            break;
-        case TELNET_EV_DATA:
-            ESP_LOGE("tlev:data", "Received %.*s", event->data.size, event->data.buffer);
-            mem_queue_put((char *)event->data.buffer, event->data.size);
-            ESP_LOGE("tlev:data", "%s", (!mem_queue_isempty()) ? "Data waiting" : "empty");
-            break;
-        case TELNET_EV_IAC:
-            ESP_LOGE("evth", "TELNET_EV_IAC");
-            break;
-        case TELNET_EV_WILL:
-            ESP_LOGE("evth", "TELNET_EV_WILL");
-            ESP_LOGI("tlev:will", "%d (%s)", event->neg.telopt, get_opt(event->neg.telopt));
-            switch(event->neg.telopt) {
-                case TELNET_TELOPT_TTYPE:
-                    telnet_ttype_send(thisClient);
-                    break;
-
-                default:
-                    break;
-            }
-            break;
-        case TELNET_EV_WONT:
-            ESP_LOGE("evth", "TELNET_EV_WONT");
-            break;
-        case TELNET_EV_DO:
-            ESP_LOGE("evth", "TELNET_EV_DO");
-            ESP_LOGI("tlev:do", "%d (%s)", event->neg.telopt, get_opt(event->neg.telopt));
-            break;
-        case TELNET_EV_DONT:
-            ESP_LOGE("evth", "TELNET_EV_DONT");
-            break;
-        case TELNET_EV_SUBNEGOTIATION:
-            ESP_LOGE("evth", "TELNET_EV_SUBNEGOTIATION [%s]", get_opt(event->sub.telopt));
-            switch (event->sub.telopt) {
-                case TELNET_TELOPT_ENVIRON:
-                case TELNET_TELOPT_NEW_ENVIRON:
-                case TELNET_TELOPT_TTYPE:
-                    break;
-                case TELNET_TELOPT_ZMP:
-                case TELNET_TELOPT_MSSP:
-                case TELNET_TELOPT_LINEMODE:
-                    ESP_LOGI("sub:lm", "%s", get_lm_cmd(event->data.buffer[0]));
-                    for(int i=1; i<event->data.size; i+=3) {
-                        ESP_LOGI("sub:lm", "%s %s %d", get_slc(event->data.buffer[i]), get_slc_lvl(event->data.buffer[i+1]), event->data.buffer[i+2]);
-                    }
-                    ESP_LOGI("evop", "%d", event->data.size);
-                    break;
-
-                case TELNET_TELOPT_NAWS:
-                    tl_this.tty.rows = event->sub.buffer[3];
-                    tl_this.tty.cols = event->sub.buffer[0];
-                    break;
-
-                default:
-                    break;
-            }
-            break;
-        case TELNET_EV_TTYPE:
-            ESP_LOGE("evth", "TELNET_EV_TTYPE");
-            tl_this.tty.ttype = (char *)calloc(1,strlen(event->ttype.name)+1);
-            strcpy(tl_this.tty.ttype, event->ttype.name);
-            ESP_LOGI("evt:tty", "(%s) %d", tl_this.tty.ttype, event->ttype.cmd);
-            break;
-
-        default:
-            break;  
-    }
-
-}
-
-esp_err_t tl_server_init() {
-
-    const char *tag = "tls:init";
-
-    tl_this.tlfds[TL_TSK_SOCKET_FD].fd = -1;
-    tl_this.tlfds[TL_TSK_CLIENT_FD].fd = -1;
-    tl_this.tl_srv_state = TL_SRV_NOACT;
-    tl_this.tty.cols = 80;
-    tl_this.tty.rows =24;
-
-    tl_this.tl_queue = xQueueCreate(5, sizeof(tl_queue_data_t));
-    tl_this.q_cmd = (tl_queue_data_t *)malloc(sizeof(tl_queue_data_t));
-    if((!tl_this.tl_queue) || (!tl_this.q_cmd)) {
-        ESP_LOGE(tag, "Queue");
-        return ESP_FAIL;
-    }
-    mem_queue_init();
-    xTaskCreate(vServerTask, "tlnsrv", 4096, NULL, 15, &tl_this.srv_tsk_handle);
-    return ESP_OK;
-}
-
-QueueHandle_t tl_get_cmd_handle() {
-    return tl_this.tl_queue;
-}
-
-/* Memory queue*/
-int mem_queue_get( char *buf, size_t len) {
-    int bytes = -1;
-    if( mem_queue_init() != ESP_OK ) { return -1; }
-    if(!mem_queue_isempty()) {
-        if(mem_queue->tail >= (mem_queue->head + len - 1) ) {
-            memcpy(buf, (mem_queue->holder+mem_queue->head), len);
-            mem_queue->head += len;
-            bytes = len;
-        } else {
-            bytes = (mem_queue->tail-mem_queue->head+1);
-            memcpy(buf, (mem_queue->holder+mem_queue->head), bytes);
-            mem_queue->head += (bytes);
-        }
-        if(mem_queue->tail < mem_queue->head) { 
-            mem_queue->tail = -1;
-            mem_queue->head = -1;
-            if(mem_queue->allocated > MEM_QUEUE_SIZE) {
-                ESP_LOGI("realoc", "%p:%u", mem_queue, mem_queue->allocated);
-                free(mem_queue->holder);
-                mem_queue->holder = (char *)malloc(MEM_QUEUE_SIZE);
-                ESP_LOGI("realoc", "%p:%u", mem_queue, mem_queue->allocated);
-                mem_queue->allocated = MEM_QUEUE_SIZE;
-            }
-        }
-        return bytes;
-    }
-    return 0;
-}
-
-void mem_queue_put( char *buf, size_t len) {
-    if( mem_queue_init() != ESP_OK ) return;
-    if(mem_queue->tail == -1) { mem_queue->head = 0; }
-    ESP_LOGI("memq 62", "len: %d:%d %d", len, mem_queue->tail, mem_queue->allocated - mem_queue->tail);
-    if((mem_queue->allocated - mem_queue->tail)<len) {
-        ESP_LOGW("memq 64", "alloc %d, tail: %d -> len: %d", mem_queue->allocated, mem_queue->tail, len);
-        //size_t new_size = len - mem_queue->tail + 1 + mem_queue->allocated;
-        size_t new_size = len + mem_queue->tail + 1; 
-        ESP_LOGE("memq 67", "{tail:%d, len:%d new_size:%d}", mem_queue->tail, len, new_size);
-        if(new_size <= MEM_QUEUE_MAX_SIZE ) {
-            mem_queue->allocated = new_size;
-            mem_queue->holder = realloc(mem_queue->holder, mem_queue->allocated);
-            if(!mem_queue->holder) {
-                ESP_LOGE("memq", "Not enough memory");
-                mem_queue->holder = (char *)malloc(MEM_QUEUE_SIZE);
-                return;
-            }
-            ESP_LOGW("memq 76", "%d:%d -> %d", len, mem_queue->tail, mem_queue->allocated);
-        } else {
-            ESP_LOGE("memq", "max_size");
-            return;
-        }
-    }
-    mem_queue->tail++;
-    memcpy((mem_queue->holder+mem_queue->tail), buf, len);
-    mem_queue->tail += len-1;
-}
-
-bool mem_queue_isempty() {
-    if( mem_queue_init() != ESP_OK ) return true;
-    return (mem_queue->tail == -1) ? true : false;
-}
-
-esp_err_t mem_queue_init() {
-    if(mem_queue) return ESP_OK;
-    ESP_LOGI("meminit", "Free heap %lu", esp_get_free_heap_size());
-    mem_queue = (mem_queue_storage_t *)malloc(sizeof(mem_queue_storage_t));
-    *mem_queue = (mem_queue_storage_t) {NULL, -1, -1, MEM_QUEUE_SIZE};
-    ESP_LOGI("memq", "init at %p, %lu", mem_queue, esp_get_free_heap_size());
-    return (!(mem_queue->holder = (char *)malloc(MEM_QUEUE_SIZE))) ? ESP_FAIL : ESP_OK;
-}
-
-/* Linenoise */
 #define REFRESH_CLEAN (1<<0)    // Clean the old prompt from the screen
 #define REFRESH_WRITE (1<<1)    // Rewrite the prompt on the screen.
 #define REFRESH_ALL (REFRESH_CLEAN|REFRESH_WRITE) // Do both.
@@ -578,6 +173,287 @@ enum KEY_ACTION{
 	BACKSPACE =  127    /* Backspace */
 };
 
+static void vServerTask(void *pvParameters) {
+    
+    const char *tag = "tl:task";
+    const telnet_telopt_t cln_opt[] = {
+        { TELNET_TELOPT_ECHO,      TELNET_WILL, TELNET_DONT },
+        { TELNET_TELOPT_SGA,       TELNET_WILL, TELNET_DO   },
+        { TELNET_TELOPT_TTYPE,     TELNET_WILL, TELNET_DO   },
+        { TELNET_TELOPT_LINEMODE,  TELNET_WILL, TELNET_DO   },
+        { TELNET_TELOPT_BINARY,    TELNET_WILL, TELNET_DO   },
+        { TELNET_TELOPT_NAWS,      TELNET_WILL, TELNET_DO   },
+        { -1, 0, 0 }
+    };
+
+    struct tl_udata {
+        int sockfd;
+    };
+
+    struct sockaddr_in cliAddr;
+    socklen_t cliAddrLen = (socklen_t)sizeof(cliAddr);
+    uint8_t recv_data[1024];
+
+    char *reject_msg = "\nToo many connections\n\n";
+
+    ESP_LOGI(tag, "vServerTask");
+
+    while(true) {
+        BaseType_t pd_qmsg = xQueueReceive(tl_this.tl_queue, (void *)tl_this.q_cmd, (TickType_t) 10 );
+        if(pd_qmsg == pdTRUE) {
+            switch (tl_this.q_cmd->cmd) {
+            case TL_START:
+                if(tl_this.tlfds[TL_TSK_SOCKET_FD].fd == -1) {
+                    ESP_LOGW(tag, "Server started");
+                    tl_this.tlfds[TL_TSK_SOCKET_FD].fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+                    struct sockaddr_in srv_addr;
+                    srv_addr.sin_family = AF_INET;
+                    srv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+                    srv_addr.sin_port = htons(23);
+                    int op_result = bind(tl_this.tlfds[TL_TSK_SOCKET_FD].fd, (struct sockaddr *)&srv_addr, sizeof(srv_addr));
+                    if(op_result == -1) {
+                        ESP_LOGE(tag, "bind %d (%s)", errno, strerror(errno));
+                    } else {
+                        tl_this.tlfds[TL_TSK_SOCKET_FD].events = POLLIN;
+                        op_result = listen(tl_this.tlfds[TL_TSK_SOCKET_FD].fd, 1);
+                        if(op_result == -1) {
+                            ESP_LOGE(tag, "listen %d (%s)", errno, strerror(errno));    
+                        } else {
+                            tl_this.tl_srv_state = TL_SRV_LISTEN; 
+                            break;
+                        }
+                    }
+                    if(op_result == -1) {
+                        shutdown(tl_this.tlfds[TL_TSK_SOCKET_FD].fd, 2);
+                        close(tl_this.tlfds[TL_TSK_SOCKET_FD].fd);
+                    }
+                }
+                break;
+            
+            default:
+                break;
+            }
+        }
+
+        if(tl_this.tlfds[TL_TSK_SOCKET_FD].fd != -1) {
+            int pollResult = poll(tl_this.tlfds, ((tl_this.tlfds[TL_TSK_CLIENT_FD].fd != -1) ? 2 : 1), 10 / portTICK_PERIOD_MS );
+            if(pollResult > 0) {
+                if(tl_this.tlfds[TL_TSK_SOCKET_FD].revents & POLLIN) {
+                    if(tl_this.tlfds[TL_TSK_CLIENT_FD].fd == -1 ) {
+                        struct tl_udata *udata = (struct tl_udata *)malloc(sizeof(struct tl_udata));
+                        tl_this.tlfds[TL_TSK_CLIENT_FD].fd = accept(tl_this.tlfds[TL_TSK_SOCKET_FD].fd, (struct sockaddr *)&cliAddr, &cliAddrLen);
+                        tl_this.handle = telnet_init(cln_opt, tl_event_handler, 0, udata);
+                        tl_this.tty.ttype = NULL;
+                        if(tl_this.handle != NULL) {
+                            tl_this.tlfds[TL_TSK_CLIENT_FD].events = POLLIN;
+                            tl_this.tl_srv_state = TL_SRV_CLIENT_CONNECTED;
+                            static const unsigned char SEND[] = { TELNET_IAC, TELNET_WILL, TELNET_TELOPT_ECHO };
+                            send(tl_this.tlfds[TL_TSK_CLIENT_FD].fd, (char *)SEND, sizeof(SEND), 0);
+                            /* linenoise */
+                            tl_this.tty.ls = (struct linenoiseState *)malloc(sizeof(struct linenoiseState));
+                            tl_this.tty.line = (char *)malloc(sizeof(char) * LN_MAX_LINE_SIZE);
+                            linenoiseEditStart(tl_this.tty.ls, tl_this.tty.line, LN_MAX_LINE_SIZE, "esp32# ");
+                            /* end */
+                        } else {
+                            write(tl_this.tlfds[TL_TSK_CLIENT_FD].fd, reject_msg, 1+strlen(reject_msg));
+                            ESP_LOGE("tln", "handler error");
+                            shutdown(tl_this.tlfds[TL_TSK_CLIENT_FD].fd, 2);
+                            close(tl_this.tlfds[TL_TSK_CLIENT_FD].fd);
+                        }
+                        
+                    } else {
+                        int fd_drop = accept(tl_this.tlfds[TL_TSK_SOCKET_FD].fd, (struct sockaddr *)&cliAddr, &cliAddrLen);
+                        write(fd_drop, reject_msg, 1+strlen(reject_msg));
+                        shutdown(fd_drop,2);
+                        close(fd_drop);
+                    }
+                }
+                if(tl_this.tlfds[TL_TSK_CLIENT_FD].fd != -1 ) {
+                    if(tl_this.tlfds[TL_TSK_CLIENT_FD].revents & POLLIN) {
+                        ssize_t len = recv(tl_this.tlfds[TL_TSK_CLIENT_FD].fd, (char *)recv_data, sizeof(recv_data), 0);
+                        if( len == 0 ) {
+                            telnet_free(tl_this.handle);
+                            shutdown(tl_this.tlfds[TL_TSK_CLIENT_FD].fd, 2);
+                            close(tl_this.tlfds[TL_TSK_CLIENT_FD].fd);
+                            tl_this.tlfds[TL_TSK_CLIENT_FD].fd = -1;
+                            free(tl_this.tty.ttype);
+                            free(tl_this.tty.ls);
+                            free(tl_this.tty.line);
+                            tl_this.tty.ttype = NULL;
+                            tl_this.tty.ls = NULL;
+                            tl_this.tty.line = NULL;
+                            tl_this.tl_srv_state = TL_SRV_LISTEN;
+                        } else { telnet_recv(tl_this.handle, (char *)recv_data, len); }
+                    }
+                }
+            }
+            if(tl_this.tlfds[TL_TSK_CLIENT_FD].fd != -1) {
+                if(!mem_queue_isempty()) {
+                    //char *buf = (char *)malloc(MEM_QUEUE_SIZE);
+                    //int count = mem_queue_get(buf, MEM_QUEUE_SIZE-1);
+                    //free(buf);
+                    tl_this.tty.ln_line = linenoiseEditFeed(tl_this.tty.ls);
+                    if(tl_this.tty.ln_line != linenoiseEditMore) {
+                        linenoiseEditStop(tl_this.tty.ls);
+                        if(tl_this.tty.ln_line == NULL) {
+                            ESP_LOGI("ln", "Empty line");
+                        }
+                        ESP_LOGW("ln", "%s", tl_this.tty.ln_line);
+                        linenoiseFree(tl_this.tty.ln_line); /* In final - just free line buffer */
+                        linenoiseEditStart(tl_this.tty.ls, tl_this.tty.line, LN_MAX_LINE_SIZE, "esp32# ");
+                    }
+                }
+            }
+        }
+    }    
+}
+
+void tl_event_handler(telnet_t *thisClient, telnet_event_t *event, void *client) {
+    switch(event->type) {
+        case TELNET_EV_SEND:
+            send(tl_this.tlfds[TL_TSK_CLIENT_FD].fd, event->data.buffer, event->data.size, 0);
+            break;
+        case TELNET_EV_DATA:
+            //ESP_LOGE("tlev:data", "Received %.*s", event->data.size, event->data.buffer);
+            mem_queue_put((char *)event->data.buffer, event->data.size);
+            break;
+        case TELNET_EV_IAC:
+            break;
+        case TELNET_EV_WILL:
+            switch(event->neg.telopt) {
+                case TELNET_TELOPT_TTYPE:
+                    telnet_ttype_send(thisClient);
+                    break;
+
+                default:
+                    break;
+            }
+            break;
+        case TELNET_EV_WONT:
+            break;
+        case TELNET_EV_DO:
+            break;
+        case TELNET_EV_DONT:
+            break;
+        case TELNET_EV_SUBNEGOTIATION:
+            switch (event->sub.telopt) {
+                case TELNET_TELOPT_ENVIRON:
+                case TELNET_TELOPT_NEW_ENVIRON:
+                case TELNET_TELOPT_TTYPE:
+                    break;
+                case TELNET_TELOPT_ZMP:
+                case TELNET_TELOPT_MSSP:
+                case TELNET_TELOPT_LINEMODE:
+                    break;
+
+                case TELNET_TELOPT_NAWS:
+                    tl_this.tty.rows = event->sub.buffer[3];
+                    tl_this.tty.cols = event->sub.buffer[0];
+                    break;
+
+                default:
+                    break;
+            }
+            break;
+        case TELNET_EV_TTYPE:
+            tl_this.tty.ttype = (char *)calloc(1,strlen(event->ttype.name)+1);
+            strcpy(tl_this.tty.ttype, event->ttype.name);
+            break;
+
+        default:
+            break;  
+    }
+
+}
+
+esp_err_t tl_server_init() {
+
+    const char *tag = "tls:init";
+
+    tl_this.tlfds[TL_TSK_SOCKET_FD].fd = -1;
+    tl_this.tlfds[TL_TSK_CLIENT_FD].fd = -1;
+    tl_this.tl_srv_state = TL_SRV_NOACT;
+    tl_this.tty.cols = 80;
+    tl_this.tty.rows =24;
+
+    tl_this.tty.ls = NULL;
+    tl_this.tty.line = NULL;
+
+    tl_this.tl_queue = xQueueCreate(5, sizeof(tl_queue_data_t));
+    tl_this.q_cmd = (tl_queue_data_t *)malloc(sizeof(tl_queue_data_t));
+    if((!tl_this.tl_queue) || (!tl_this.q_cmd)) {
+        ESP_LOGE(tag, "Queue");
+        return ESP_FAIL;
+    }
+
+    mem_queue_init();
+    xTaskCreate(vServerTask, "tlnsrv", 4096, NULL, 15, &tl_this.srv_tsk_handle);
+    return ESP_OK;
+}
+
+QueueHandle_t tl_get_cmd_handle() {
+    return tl_this.tl_queue;
+}
+
+/* Memory queue*/
+int mem_queue_get( char *buf, size_t len) {
+    int bytes = -1;
+    if( mem_queue_init() != ESP_OK ) { return -1; }
+    if(!mem_queue_isempty()) {
+        if(mem_queue->tail >= (mem_queue->head + len - 1) ) {
+            memcpy(buf, (mem_queue->holder+mem_queue->head), len);
+            mem_queue->head += len;
+            bytes = len;
+        } else {
+            bytes = (mem_queue->tail-mem_queue->head+1);
+            memcpy(buf, (mem_queue->holder+mem_queue->head), bytes);
+            mem_queue->head += (bytes);
+        }
+        if(mem_queue->tail < mem_queue->head) { 
+            mem_queue->tail = -1;
+            mem_queue->head = -1;
+            if(mem_queue->allocated > MEM_QUEUE_SIZE) {
+                free(mem_queue->holder);
+                mem_queue->holder = (char *)malloc(MEM_QUEUE_SIZE);
+                mem_queue->allocated = MEM_QUEUE_SIZE;
+            }
+        }
+        return bytes;
+    }
+    return 0;
+}
+
+void mem_queue_put( char *buf, size_t len) {
+    if( mem_queue_init() != ESP_OK ) return;
+    if(mem_queue->tail == -1) { mem_queue->head = 0; }
+    if((mem_queue->allocated - mem_queue->tail)<len) {
+        size_t new_size = len + mem_queue->tail + 1; 
+        if(new_size <= MEM_QUEUE_MAX_SIZE ) {
+            mem_queue->allocated = new_size;
+            mem_queue->holder = realloc(mem_queue->holder, mem_queue->allocated);
+            if(!mem_queue->holder) {
+                ESP_LOGE("memq", "Not enough memory");
+                mem_queue->holder = (char *)malloc(MEM_QUEUE_SIZE);
+                return;
+            }
+        } else { return; }
+    }
+    mem_queue->tail++;
+    memcpy((mem_queue->holder+mem_queue->tail), buf, len);
+    mem_queue->tail += len-1;
+}
+
+bool mem_queue_isempty() {
+    if( mem_queue_init() != ESP_OK ) return true;
+    return (mem_queue->tail == -1) ? true : false;
+}
+
+esp_err_t mem_queue_init() {
+    if(mem_queue) return ESP_OK;
+    mem_queue = (mem_queue_storage_t *)malloc(sizeof(mem_queue_storage_t));
+    *mem_queue = (mem_queue_storage_t) {NULL, -1, -1, MEM_QUEUE_SIZE};
+    return (!(mem_queue->holder = (char *)malloc(MEM_QUEUE_SIZE))) ? ESP_FAIL : ESP_OK;
+}
 
 /* =========================== Line editing ================================= */
 
@@ -618,7 +494,7 @@ static void abFree(struct abuf *ab) {
 static void refreshSingleLine(struct linenoiseState *l, int flags) {
     char seq[64];
     size_t plen = strlen(l->prompt);
-    int fd = l->ofd;
+    //int fd = l->ofd;
     char *buf = l->buf;
     size_t len = l->len;
     size_t pos = l->pos;
@@ -660,7 +536,8 @@ static void refreshSingleLine(struct linenoiseState *l, int flags) {
         abAppend(&ab,seq,strlen(seq));
     }
 
-    if (write(fd,ab.b,ab.len) == -1) {} /* Can't recover from write error. */
+    //if (write(fd,ab.b,ab.len) == -1) {} /* Can't recover from write error. */
+    telnet_send(tl_this.handle, ab.b, ab.len);
     abFree(&ab);
 }
 
@@ -679,7 +556,8 @@ static void refreshMultiLine(struct linenoiseState *l, int flags) {
     int rpos2; /* rpos after refresh. */
     int col; /* colum position, zero-based. */
     int old_rows = l->oldrows;
-    int fd = l->ofd, j;
+    //int fd = l->ofd, j;
+    int j;
     struct abuf ab;
 
     l->oldrows = rows;
@@ -761,7 +639,8 @@ static void refreshMultiLine(struct linenoiseState *l, int flags) {
     //lndebug("\n");
     l->oldpos = l->pos;
 
-    if (write(fd,ab.b,ab.len) == -1) {} /* Can't recover from write error. */
+    //if (write(fd,ab.b,ab.len) == -1) {} /* Can't recover from write error. */
+    telnet_send(tl_this.handle, ab.b, ab.len);
     abFree(&ab);
 }
 
@@ -810,7 +689,8 @@ int linenoiseEditInsert(struct linenoiseState *l, char c) {
                 /* Avoid a full update of the line in the
                  * trivial case. */
                 char d = (maskmode==1) ? '*' : c;
-                if (write(l->ofd,&d,1) == -1) return -1;
+                //if (write(l->ofd,&d,1) == -1) return -1;
+                telnet_send(tl_this.handle, &d, 1);
             } else {
                 refreshLine(l);
             }
@@ -971,12 +851,13 @@ static int completeLine(struct linenoiseState *ls, int keypressed) {
     return c; /* Return last read character */
 }
 
-int linenoiseEditStart(struct linenoiseState *l, int stdin_fd, int stdout_fd, char *buf, size_t buflen, const char *prompt) {
+//int linenoiseEditStart(struct linenoiseState *l, int stdin_fd, int stdout_fd, char *buf, size_t buflen, const char *prompt) {
+int linenoiseEditStart(struct linenoiseState *l, char *buf, size_t buflen, const char *prompt) {
     /* Populate the linenoise state that we pass to functions implementing
      * specific editing functionalities. */
     l->in_completion = 0;
-    l->ifd = stdin_fd != -1 ? stdin_fd : STDIN_FILENO;
-    l->ofd = stdout_fd != -1 ? stdout_fd : STDOUT_FILENO;
+    //l->ifd = stdin_fd != -1 ? stdin_fd : STDIN_FILENO;
+    //l->ofd = stdout_fd != -1 ? stdout_fd : STDOUT_FILENO;
     l->buf = buf;
     l->buflen = buflen;
     l->prompt = prompt;
@@ -1003,7 +884,8 @@ int linenoiseEditStart(struct linenoiseState *l, int stdin_fd, int stdout_fd, ch
      * initially is just an empty string. */
     //linenoiseHistoryAdd("");
 
-    if (write(l->ofd,prompt,l->plen) == -1) return -1;
+    //if (write(l->ofd,prompt,l->plen) == -1) return -1;
+    telnet_send(tl_this.handle, prompt, l->plen);
     return 0;
 }
 
@@ -1013,11 +895,12 @@ char *linenoiseEditFeed(struct linenoiseState *l) {
     //if (!isatty(l->ifd)) return linenoiseNoTTY();
 
     char c;
-    int nread;
+    //int nread;
     char seq[3];
 
-    nread = read(l->ifd,&c,1);
-    if (nread <= 0) return NULL;
+    //nread = read(l->ifd,&c,1);
+    if(mem_queue_get(&c, 1) == 0) return NULL;
+    //if (nread <= 0) return NULL;
 
     /* Only autocomplete when the callback is set. It returns < 0 when
      * there was an error reading from fd. Otherwise it will return the
@@ -1026,6 +909,7 @@ char *linenoiseEditFeed(struct linenoiseState *l) {
         c = completeLine(l,c);
         /* Return on errors */
         /* Out of scope !!! completeLine return last character */
+        /* Still not understand what to do */
         // if (c < 0) return NULL;
         /* Read next character when 0 */
         if (c == 0) return linenoiseEditMore;
@@ -1034,7 +918,7 @@ char *linenoiseEditFeed(struct linenoiseState *l) {
     switch(c) {
     case ENTER:    /* enter */
         history_len--;
-        free(history[history_len]);
+        //free(history[history_len]);
         if (mlmode) linenoiseEditMoveEnd(l);
         if (hintsCallback) {
             /* Force a refresh without hints to leave the previous
@@ -1088,14 +972,16 @@ char *linenoiseEditFeed(struct linenoiseState *l) {
         /* Read the next two bytes representing the escape sequence.
          * Use two calls to handle slow terminals returning the two
          * chars at different times. */
-        if (read(l->ifd,seq,1) == -1) break;
-        if (read(l->ifd,seq+1,1) == -1) break;
+        //if (read(l->ifd,seq,1) == -1) break;
+        //if (read(l->ifd,seq+1,1) == -1) break;
+        if(mem_queue_get(seq,2) != 2) break;
 
         /* ESC [ sequences. */
         if (seq[0] == '[') {
             if (seq[1] >= '0' && seq[1] <= '9') {
                 /* Extended escape, read additional byte. */
-                if (read(l->ifd,seq+2,1) == -1) break;
+                //if (read(l->ifd,seq+2,1) == -1) break;
+                if(mem_queue_get(seq+2,1) == 0) break;
                 if (seq[2] == '~') {
                     switch(seq[1]) {
                     case '3': /* Delete key. */
@@ -1176,12 +1062,18 @@ void linenoiseEditStop(struct linenoiseState *l) {
     printf("\n"); */
 }
 
+void linenoiseFree(void *ptr) {
+    if (ptr == linenoiseEditMore) return; // Protect from API misuse.
+    free(ptr);
+}
+
 /* Other utilities. */
 /* Clear the screen. Used to handle ctrl+l */
 void linenoiseClearScreen(void) {
-    if (write(STDOUT_FILENO,"\x1b[H\x1b[2J",7) <= 0) {
+    //if (write(STDOUT_FILENO,"\x1b[H\x1b[2J",7) <= 0) {
         /* nothing to do, just to avoid warning. */
-    }
+    //}
+    telnet_send(tl_this.handle, "\x1b[H\x1b[2J",7);
 }
 
 /* Set if to use or not the multi line mode. */

@@ -16,7 +16,7 @@
 //#include "nvs_flash.h"
 #include "esp_event.h"
 //#include "freertos/event_groups.h"
-
+/*
 #define TS_LM_MODE          1
 #define TS_LM_FORWARDMASK   2
 #define TS_LM_SLC           3
@@ -64,7 +64,7 @@
 #define TS_SLC_ACK        128
 #define TS_SLC_FLUSHIN     64
 #define TS_SLC_FLUSHOUT    32
-
+*/
 typedef enum {
     TL_START,
     TL_STOP,
@@ -81,58 +81,7 @@ typedef struct tl_queue_data {
     tl_cmds_e cmd;
 } tl_queue_data_t;
 
-//void tl_server_init(esp_event_loop_handle_t *uevent_handle, esp_event_base_t event_base, int32_t event_id);
-//void tl_();
 esp_err_t tl_server_init();
 QueueHandle_t tl_get_cmd_handle();
-
-/* Linenoise component */
-
-extern char *linenoiseEditMore;
-
-/* The linenoiseState structure represents the state during line editing.
- * We pass this state to functions implementing specific editing
- * functionalities. */
-struct linenoiseState {
-    int in_completion;  /* The user pressed TAB and we are now in completion
-                         * mode, so input is handled by completeLine(). */
-    size_t completion_idx; /* Index of next completion to propose. */
-    int ifd;            /* Terminal stdin file descriptor. */
-    int ofd;            /* Terminal stdout file descriptor. */
-    char *buf;          /* Edited line buffer. */
-    size_t buflen;      /* Edited line buffer size. */
-    const char *prompt; /* Prompt to display. */
-    size_t plen;        /* Prompt length. */
-    size_t pos;         /* Current cursor position. */
-    size_t oldpos;      /* Previous refresh cursor position. */
-    size_t len;         /* Current edited line length. */
-    size_t cols;        /* Number of columns in terminal. */
-    size_t oldrows;     /* Rows used by last refrehsed line (multiline mode) */
-    int history_index;  /* The history index we are currently editing. */
-};
-
-typedef struct linenoiseCompletions {
-  size_t len;
-  char **cvec;
-} linenoiseCompletions;
-
-/* Completion API. */
-typedef void(linenoiseCompletionCallback)(const char *, linenoiseCompletions *);
-typedef char*(linenoiseHintsCallback)(const char *, int *color, int *bold);
-typedef void(linenoiseFreeHintsCallback)(void *);
-
-/* Non blocking API. */
-int linenoiseEditStart(struct linenoiseState *l, int stdin_fd, int stdout_fd, char *buf, size_t buflen, const char *prompt);
-char *linenoiseEditFeed(struct linenoiseState *l);
-void linenoiseEditStop(struct linenoiseState *l);
-void linenoiseHide(struct linenoiseState *l);
-void linenoiseShow(struct linenoiseState *l);
-
-/* Other utilities. */
-void linenoiseClearScreen(void);
-void linenoiseSetMultiLine(int ml);
-void linenoisePrintKeyCodes(void);
-void linenoiseMaskModeEnable(void);
-void linenoiseMaskModeDisable(void);
 
 #endif /* _ESP_TELNET_SERVER_H_ */
