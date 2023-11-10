@@ -116,6 +116,11 @@ typedef struct linenoiseCompletions {
   char **cvec;
 } linenoiseCompletions;
 
+/* Completion API. */
+typedef void(linenoiseCompletionCallback)(const char *, linenoiseCompletions *);
+typedef char*(linenoiseHintsCallback)(const char *, int *color, int *bold);
+typedef void(linenoiseFreeHintsCallback)(void *);
+
 /* Non blocking API. */
 int linenoiseEditStart(struct linenoiseState *l, int stdin_fd, int stdout_fd, char *buf, size_t buflen, const char *prompt);
 char *linenoiseEditFeed(struct linenoiseState *l);
