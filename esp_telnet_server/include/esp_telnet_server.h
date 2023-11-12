@@ -66,9 +66,9 @@
 #define TS_SLC_FLUSHOUT    32
 */
 typedef enum {
-    TL_START,
-    TL_STOP,
-    TL_SHUTDOWN
+    TL_CMD_START,
+    TL_CMD_STOP,
+    TL_CMD_SHUTDOWN
 } tl_cmds_e;
 
 typedef enum {
@@ -77,11 +77,21 @@ typedef enum {
     TL_SRV_CLIENT_CONNECTED
 } tl_srv_state_t;
 
+typedef enum {
+    TLSRV_EVENT_SERVER_START,
+    TLSRV_EVENT_SERVER_STOP,
+    TLSRV_EVENT_CLIENT_CONNECT,
+    TLSRV_EVENT_CLIENT_DISCONNECT,
+    TLSRV_EVENT_LINE_TYPED
+} tlsrv_event_t;
+
+ESP_EVENT_DECLARE_BASE(TLSRV_EVENT);
+
 typedef struct tl_queue_data {
     tl_cmds_e cmd;
 } tl_queue_data_t;
 
-esp_err_t tl_server_init();
+esp_err_t tl_server_init(esp_event_loop_handle_t *p_uevent_loop);
 QueueHandle_t tl_get_cmd_handle();
 
 #endif /* _ESP_TELNET_SERVER_H_ */

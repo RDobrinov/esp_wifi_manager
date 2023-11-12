@@ -16,7 +16,7 @@
 #define TL_TSK_PIPE_TO_FD   3
 
 /* Linenoise state used by tl_data */
-#define LN_MAX_LINE_SIZE    1024
+#define LN_MAX_LINE_SIZE    254
 
 struct linenoiseState {
     int in_completion;  /* The user pressed TAB and we are now in completion
@@ -42,6 +42,7 @@ typedef struct tl_client {
 } tl_client_t;
 
 typedef struct tl_data {
+    esp_event_loop_handle_t *p_uevent_loop;
     telnet_t *handle;
     //tl_client_t tl_cln;
     tl_srv_state_t tl_srv_state;
@@ -63,14 +64,16 @@ tl_data_t tl_this;
 
 static void vServerTask(void *pvParameters);
 void tl_event_handler(telnet_t *thisClient, telnet_event_t *event, void *client);
+
+ESP_EVENT_DEFINE_BASE(TNSRV_EVENT);
 //static void tl_comm_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);
 
-static const char *get_cmd(unsigned char cmd);
+/* static const char *get_cmd(unsigned char cmd);
 static const char *get_opt(unsigned char opt);
 static const char *get_slc(unsigned char slc); 
 static const char *get_lm_cmd(unsigned char cmd);
 static const char *get_slc_lvl(unsigned char lvl);
-
+*/
 /* Memory queue */
 
 
@@ -133,18 +136,25 @@ void linenoiseMaskModeDisable(void);
 #define LINENOISE_HISTORY_NEXT 0
 #define LINENOISE_HISTORY_PREV 1
 
-#define LINENOISE_DEFAULT_HISTORY_MAX_LEN 100
-#define LINENOISE_MAX_LINE 4096
-static char *unsupported_term[] = {"dumb","cons25","emacs",NULL};
+#define LINENOISE_DEFAULT_HISTORY_MAX_LEN 8
+
+static void freeHistory(void);
+int linenoiseHistoryAdd(const char *line);
+int linenoiseHistorySetMaxLen(int len);
+void linenoiseEditHistoryNext(struct linenoiseState *l, int dir);
+
+//static char *unsupported_term[] = {"dumb","cons25","emacs",NULL};
 static linenoiseCompletionCallback *completionCallback = NULL;
 static linenoiseHintsCallback *hintsCallback = NULL;
-static linenoiseFreeHintsCallback *freeHintsCallback = NULL;
+//static linenoiseFreeHintsCallback *freeHintsCallback = NULL;
+
 //static char *linenoiseNoTTY(void);
+static void refreshLine(struct linenoiseState *l);
 //static void refreshLineWithCompletion(struct linenoiseState *ls, linenoiseCompletions *lc, int flags);
 //static void refreshLineWithFlags(struct linenoiseState *l, int flags);
 
 static int maskmode = 0; /* Show "***" instead of input. For passwords. */
-static int rawmode = 0; /* For atexit() function to check if restore is needed*/
+//static int rawmode = 0; /* For atexit() function to check if restore is needed*/
 static int mlmode = 0;  /* Multi line mode. Default is single line. */
 //static int atexit_registered = 0; /* Register atexit just 1 time. */
 static int history_max_len = LINENOISE_DEFAULT_HISTORY_MAX_LEN;
@@ -199,10 +209,11 @@ static void vServerTask(void *pvParameters) {
     ESP_LOGI(tag, "vServerTask");
 
     while(true) {
-        BaseType_t pd_qmsg = xQueueReceive(tl_this.tl_queue, (void *)tl_this.q_cmd, (TickType_t) 10 );
+        //ESP_LOGW("vSTsk", "loop start");
+        BaseType_t pd_qmsg = xQueueReceive(tl_this.tl_queue, (void *)tl_this.q_cmd, (TickType_t) 1 );
         if(pd_qmsg == pdTRUE) {
             switch (tl_this.q_cmd->cmd) {
-            case TL_START:
+            case TL_CMD_START:
                 if(tl_this.tlfds[TL_TSK_SOCKET_FD].fd == -1) {
                     ESP_LOGW(tag, "Server started");
                     tl_this.tlfds[TL_TSK_SOCKET_FD].fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -234,9 +245,9 @@ static void vServerTask(void *pvParameters) {
                 break;
             }
         }
-
+        //ESP_LOGW("vSTsk", "sock fd");
         if(tl_this.tlfds[TL_TSK_SOCKET_FD].fd != -1) {
-            int pollResult = poll(tl_this.tlfds, ((tl_this.tlfds[TL_TSK_CLIENT_FD].fd != -1) ? 2 : 1), 10 / portTICK_PERIOD_MS );
+            int pollResult = poll(tl_this.tlfds, ((tl_this.tlfds[TL_TSK_CLIENT_FD].fd != -1) ? 2 : 1), 1 / portTICK_PERIOD_MS );
             if(pollResult > 0) {
                 if(tl_this.tlfds[TL_TSK_SOCKET_FD].revents & POLLIN) {
                     if(tl_this.tlfds[TL_TSK_CLIENT_FD].fd == -1 ) {
@@ -279,6 +290,7 @@ static void vServerTask(void *pvParameters) {
                             free(tl_this.tty.ttype);
                             free(tl_this.tty.ls);
                             free(tl_this.tty.line);
+                            freeHistory();
                             tl_this.tty.ttype = NULL;
                             tl_this.tty.ls = NULL;
                             tl_this.tty.line = NULL;
@@ -289,22 +301,29 @@ static void vServerTask(void *pvParameters) {
             }
             if(tl_this.tlfds[TL_TSK_CLIENT_FD].fd != -1) {
                 if(!mem_queue_isempty()) {
-                    //char *buf = (char *)malloc(MEM_QUEUE_SIZE);
-                    //int count = mem_queue_get(buf, MEM_QUEUE_SIZE-1);
-                    //free(buf);
+                //    char *buf = (char *)malloc(MEM_QUEUE_SIZE);
+                //    int count = mem_queue_get(buf, MEM_QUEUE_SIZE-1);
+                //    buf[count] = 0x00;
+                //    ESP_LOGI("tlev", "%s", buf);
+                //    free(buf);
                     tl_this.tty.ln_line = linenoiseEditFeed(tl_this.tty.ls);
                     if(tl_this.tty.ln_line != linenoiseEditMore) {
                         linenoiseEditStop(tl_this.tty.ls);
                         if(tl_this.tty.ln_line == NULL) {
                             ESP_LOGI("ln", "Empty line");
+                        } else {
+                            ESP_LOGW("ln", "%s", tl_this.tty.ln_line);
+                            linenoiseHistoryAdd(tl_this.tty.ln_line);
                         }
-                        ESP_LOGW("ln", "%s", tl_this.tty.ln_line);
                         linenoiseFree(tl_this.tty.ln_line); /* In final - just free line buffer */
                         linenoiseEditStart(tl_this.tty.ls, tl_this.tty.line, LN_MAX_LINE_SIZE, "esp32# ");
+                        //ESP_LOGI("ln", "Finished line Exit");
                     }
                 }
             }
+            //ESP_LOGI("ln", "Finished memq");
         }
+        //ESP_LOGI("ln", "Finished sock fd");
     }    
 }
 
@@ -348,7 +367,13 @@ void tl_event_handler(telnet_t *thisClient, telnet_event_t *event, void *client)
 
                 case TELNET_TELOPT_NAWS:
                     tl_this.tty.rows = event->sub.buffer[3];
-                    tl_this.tty.cols = event->sub.buffer[0];
+                    tl_this.tty.cols = event->sub.buffer[1];
+                    if(tl_this.tl_srv_state == TL_SRV_CLIENT_CONNECTED) {
+                        //linenoiseHide(tl_this.tty.ls);
+                        tl_this.tty.ls->cols = tl_this.tty.cols;
+                        //linenoiseShow(tl_this.tty.ls);
+                    }
+                    //ESP_LOGI("tlev", "Set cols %d, %d, %d, %d", event->sub.buffer[0], event->sub.buffer[1], event->sub.buffer[2], event->sub.buffer[3]);
                     break;
 
                 default:
@@ -366,7 +391,7 @@ void tl_event_handler(telnet_t *thisClient, telnet_event_t *event, void *client)
 
 }
 
-esp_err_t tl_server_init() {
+esp_err_t tl_server_init(esp_event_loop_handle_t *p_uevent_loop) {
 
     const char *tag = "tls:init";
 
@@ -426,8 +451,10 @@ int mem_queue_get( char *buf, size_t len) {
 void mem_queue_put( char *buf, size_t len) {
     if( mem_queue_init() != ESP_OK ) return;
     if(mem_queue->tail == -1) { mem_queue->head = 0; }
+    //ESP_LOGE("memq", "%d {%d:%d}", mem_queue->allocated, mem_queue->head, mem_queue->tail);
     if((mem_queue->allocated - mem_queue->tail)<len) {
-        size_t new_size = len + mem_queue->tail + 1; 
+        size_t new_size = len + mem_queue->tail + 1;
+        //ESP_LOGW("memq", "%d {%d:%d} %d", mem_queue->allocated, mem_queue->head, mem_queue->tail, new_size);
         if(new_size <= MEM_QUEUE_MAX_SIZE ) {
             mem_queue->allocated = new_size;
             mem_queue->holder = realloc(mem_queue->holder, mem_queue->allocated);
@@ -445,6 +472,11 @@ void mem_queue_put( char *buf, size_t len) {
 
 bool mem_queue_isempty() {
     if( mem_queue_init() != ESP_OK ) return true;
+    /*ESP_LOGE("memq", "isempty {%d:%d}", mem_queue->head, mem_queue->tail);
+    if(mem_queue->head>-1) {
+        for(int i=mem_queue->head; i<=mem_queue->tail; i++) { printf("%02X ", mem_queue->holder[i]);}
+        printf("\n");
+    }*/
     return (mem_queue->tail == -1) ? true : false;
 }
 
@@ -465,6 +497,11 @@ struct abuf {
     char *b;
     int len;
 };
+
+static void tl_send_new_line()
+{
+    telnet_send(tl_this.handle, "\r\n", 2);
+}
 
 static void abInit(struct abuf *ab) {
     ab->b = NULL;
@@ -499,7 +536,6 @@ static void refreshSingleLine(struct linenoiseState *l, int flags) {
     size_t len = l->len;
     size_t pos = l->pos;
     struct abuf ab;
-
     while((plen+pos) >= l->cols) {
         buf++;
         len--;
@@ -882,7 +918,7 @@ int linenoiseEditStart(struct linenoiseState *l, char *buf, size_t buflen, const
 
     /* The latest history entry is always our current buffer, that
      * initially is just an empty string. */
-    //linenoiseHistoryAdd("");
+    linenoiseHistoryAdd("");
 
     //if (write(l->ofd,prompt,l->plen) == -1) return -1;
     telnet_send(tl_this.handle, prompt, l->plen);
@@ -898,10 +934,9 @@ char *linenoiseEditFeed(struct linenoiseState *l) {
     //int nread;
     char seq[3];
 
-    //nread = read(l->ifd,&c,1);
+    //nread = mem_queue_get(&c, 1);
     if(mem_queue_get(&c, 1) == 0) return NULL;
     //if (nread <= 0) return NULL;
-
     /* Only autocomplete when the callback is set. It returns < 0 when
      * there was an error reading from fd. Otherwise it will return the
      * character that should be handled next. */
@@ -914,11 +949,11 @@ char *linenoiseEditFeed(struct linenoiseState *l) {
         /* Read next character when 0 */
         if (c == 0) return linenoiseEditMore;
     }
-
     switch(c) {
     case ENTER:    /* enter */
         history_len--;
-        //free(history[history_len]);
+        free(history[history_len]);
+        mem_queue_get(seq, 1);      /* Get 0x00 from telnet */
         if (mlmode) linenoiseEditMoveEnd(l);
         if (hintsCallback) {
             /* Force a refresh without hints to leave the previous
@@ -928,9 +963,11 @@ char *linenoiseEditFeed(struct linenoiseState *l) {
             refreshLine(l);
             hintsCallback = hc;
         }
+        tl_send_new_line();
         return strdup(l->buf);
     case CTRL_C:     /* ctrl-c */
-        errno = EAGAIN;
+        //errno = EAGAIN;
+        tl_send_new_line();
         return NULL;
     case BACKSPACE:   /* backspace */
     case 8:     /* ctrl-h */
@@ -963,10 +1000,10 @@ char *linenoiseEditFeed(struct linenoiseState *l) {
         linenoiseEditMoveRight(l);
         break;
     case CTRL_P:    /* ctrl-p */
-        //linenoiseEditHistoryNext(l, LINENOISE_HISTORY_PREV);
+        linenoiseEditHistoryNext(l, LINENOISE_HISTORY_PREV);
         break;
     case CTRL_N:    /* ctrl-n */
-        //linenoiseEditHistoryNext(l, LINENOISE_HISTORY_NEXT);
+        linenoiseEditHistoryNext(l, LINENOISE_HISTORY_NEXT);
         break;
     case ESC:    /* escape sequence */
         /* Read the next two bytes representing the escape sequence.
@@ -992,10 +1029,10 @@ char *linenoiseEditFeed(struct linenoiseState *l) {
             } else {
                 switch(seq[1]) {
                 case 'A': /* Up */
-                    //linenoiseEditHistoryNext(l, LINENOISE_HISTORY_PREV);
+                    linenoiseEditHistoryNext(l, LINENOISE_HISTORY_PREV);
                     break;
                 case 'B': /* Down */
-                    //linenoiseEditHistoryNext(l, LINENOISE_HISTORY_NEXT);
+                    linenoiseEditHistoryNext(l, LINENOISE_HISTORY_NEXT);
                     break;
                 case 'C': /* Right */
                     linenoiseEditMoveRight(l);
@@ -1025,9 +1062,6 @@ char *linenoiseEditFeed(struct linenoiseState *l) {
             }
         }
         break;
-    default:
-        if (linenoiseEditInsert(l,c)) return NULL;
-        break;
     case CTRL_U: /* Ctrl+u, delete the whole line. */
         l->buf[0] = '\0';
         l->pos = l->len = 0;
@@ -1050,6 +1084,9 @@ char *linenoiseEditFeed(struct linenoiseState *l) {
         break;
     case CTRL_W: /* ctrl+w, delete previous word */
         linenoiseEditDeletePrevWord(l);
+        break;
+    default:
+        if (linenoiseEditInsert(l,c)) return NULL;
         break;
     }
     return linenoiseEditMore;
@@ -1088,4 +1125,111 @@ void linenoiseMaskModeEnable(void) {
 /* Disable mask mode. */
 void linenoiseMaskModeDisable(void) {
     maskmode = 0;
+}
+
+/* ================================ History ================================= */
+
+/* Free the history, but does not reset it. Only used when we have to
+ * exit() to avoid memory leaks are reported by valgrind & co. */
+/* To clear at telnet close */
+static void freeHistory(void) {
+    if (history) {
+        int j;
+
+        for (j = 0; j < history_len; j++)
+            free(history[j]);
+        free(history);
+        history = NULL;
+    }
+}
+
+/* This is the API call to add a new entry in the linenoise history.
+ * It uses a fixed array of char pointers that are shifted (memmoved)
+ * when the history max length is reached in order to remove the older
+ * entry and make room for the new one, so it is not exactly suitable for huge
+ * histories, but will work well for a few hundred of entries.
+ *
+ * Using a circular buffer is smarter, but a bit more complex to handle. */
+int linenoiseHistoryAdd(const char *line) {
+    char *linecopy;
+
+    if (history_max_len == 0) return 0;
+
+    /* Initialization on first call. */
+    if (history == NULL) {
+        history = malloc(sizeof(char*)*history_max_len);
+        if (history == NULL) return 0;
+        memset(history,0,(sizeof(char*)*history_max_len));
+        history_len = 0; 
+    }
+
+    /* Don't add duplicated lines. */
+    if (history_len && !strcmp(history[history_len-1], line)) return 0;
+    /* Add an heap allocated copy of the line in the history.
+     * If we reached the max length, remove the older line. */
+    linecopy = strdup(line);
+    if (!linecopy) return 0;
+    if (history_len == history_max_len) {
+        free(history[0]);
+        memmove(history,history+1,sizeof(char*)*(history_max_len-1));
+        history_len--;
+    }
+    history[history_len] = linecopy;
+    history_len++;
+    return 1;
+}
+
+/* Set the maximum length for the history. This function can be called even
+ * if there is already some history, the function will make sure to retain
+ * just the latest 'len' elements if the new history length value is smaller
+ * than the amount of items already inside the history. */
+int linenoiseHistorySetMaxLen(int len) {
+    char **new;
+
+    if (len < 1) return 0;
+    if (history) {
+        int tocopy = history_len;
+
+        new = malloc(sizeof(char*)*len);
+        if (new == NULL) return 0;
+
+        /* If we can't copy everything, free the elements we'll not use. */
+        if (len < tocopy) {
+            int j;
+
+            for (j = 0; j < tocopy-len; j++) free(history[j]);
+            tocopy = len;
+        }
+        memset(new,0,sizeof(char*)*len);
+        memcpy(new,history+(history_len-tocopy), sizeof(char*)*tocopy);
+        free(history);
+        history = new;
+    }
+    history_max_len = len;
+    if (history_len > history_max_len)
+        history_len = history_max_len;
+    return 1;
+}
+
+void linenoiseEditHistoryNext(struct linenoiseState *l, int dir) {
+    if (history_len > 1) {
+        /* Update the current history entry before to
+         * overwrite it with the next one. */
+        //linenoiseHistoryAdd(l->buf);
+        free(history[history_len - 1 - l->history_index]);
+        history[history_len - 1 - l->history_index] = strdup(l->buf);
+        /* Show the new entry */
+        l->history_index += (dir == LINENOISE_HISTORY_PREV) ? 1 : -1;
+        if (l->history_index == 0) {
+            l->history_index = 1;
+            return;
+        } else if (l->history_index >= history_len) {
+            l->history_index = history_len-1;
+            return;
+        }        
+        strncpy(l->buf,history[history_len - 1 - l->history_index],l->buflen);
+        l->buf[l->buflen-1] = '\0';
+        l->len = l->pos = strlen(l->buf);
+        refreshLine(l);
+    }
 }
