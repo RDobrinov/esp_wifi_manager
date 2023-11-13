@@ -42,7 +42,7 @@ typedef struct tl_client {
 } tl_client_t;
 
 typedef struct tl_data {
-    esp_event_loop_handle_t *p_uevent_loop;
+    esp_event_loop_handle_t uevent_loop; //?????????????
     telnet_t *handle;
     //tl_client_t tl_cln;
     tl_srv_state_t tl_srv_state;
@@ -60,12 +60,13 @@ typedef struct tl_data {
     struct pollfd tlfds[2];
 } tl_data_t;
 
-tl_data_t tl_this;
+tl_data_t *tl_this;
 
 static void vServerTask(void *pvParameters);
-void tl_event_handler(telnet_t *thisClient, telnet_event_t *event, void *client);
+static void tl_event_handler(telnet_t *thisClient, telnet_event_t *event, void *client);
+static esp_err_t tl_event_post(int32_t event_id, const void *event_data, size_t event_data_size);
 
-ESP_EVENT_DEFINE_BASE(TNSRV_EVENT);
+ESP_EVENT_DEFINE_BASE(TLSRV_EVENT);
 //static void tl_comm_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);
 
 /* static const char *get_cmd(unsigned char cmd);
@@ -210,33 +211,34 @@ static void vServerTask(void *pvParameters) {
 
     while(true) {
         //ESP_LOGW("vSTsk", "loop start");
-        BaseType_t pd_qmsg = xQueueReceive(tl_this.tl_queue, (void *)tl_this.q_cmd, (TickType_t) 1 );
+        BaseType_t pd_qmsg = xQueueReceive(tl_this->tl_queue, (void *)tl_this->q_cmd, (TickType_t) 1 );
         if(pd_qmsg == pdTRUE) {
-            switch (tl_this.q_cmd->cmd) {
+            switch (tl_this->q_cmd->cmd) {
             case TL_CMD_START:
-                if(tl_this.tlfds[TL_TSK_SOCKET_FD].fd == -1) {
+                if(tl_this->tlfds[TL_TSK_SOCKET_FD].fd == -1) {
                     ESP_LOGW(tag, "Server started");
-                    tl_this.tlfds[TL_TSK_SOCKET_FD].fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+                    tl_this->tlfds[TL_TSK_SOCKET_FD].fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
                     struct sockaddr_in srv_addr;
                     srv_addr.sin_family = AF_INET;
                     srv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
                     srv_addr.sin_port = htons(23);
-                    int op_result = bind(tl_this.tlfds[TL_TSK_SOCKET_FD].fd, (struct sockaddr *)&srv_addr, sizeof(srv_addr));
+                    int op_result = bind(tl_this->tlfds[TL_TSK_SOCKET_FD].fd, (struct sockaddr *)&srv_addr, sizeof(srv_addr));
                     if(op_result == -1) {
                         ESP_LOGE(tag, "bind %d (%s)", errno, strerror(errno));
                     } else {
-                        tl_this.tlfds[TL_TSK_SOCKET_FD].events = POLLIN;
-                        op_result = listen(tl_this.tlfds[TL_TSK_SOCKET_FD].fd, 1);
+                        tl_this->tlfds[TL_TSK_SOCKET_FD].events = POLLIN;
+                        op_result = listen(tl_this->tlfds[TL_TSK_SOCKET_FD].fd, 1);
                         if(op_result == -1) {
                             ESP_LOGE(tag, "listen %d (%s)", errno, strerror(errno));    
                         } else {
-                            tl_this.tl_srv_state = TL_SRV_LISTEN; 
+                            tl_this->tl_srv_state = TL_SRV_LISTEN;
+                            //esp_event_post_to(tl_this->p_uevent_loop, TLSRV_EVENT, TLSRV_EVENT_SERVER_START, &srv_addr.sin_addr.s_addr, sizeof(uint32_t), 1);
                             break;
                         }
                     }
                     if(op_result == -1) {
-                        shutdown(tl_this.tlfds[TL_TSK_SOCKET_FD].fd, 2);
-                        close(tl_this.tlfds[TL_TSK_SOCKET_FD].fd);
+                        shutdown(tl_this->tlfds[TL_TSK_SOCKET_FD].fd, 2);
+                        close(tl_this->tlfds[TL_TSK_SOCKET_FD].fd);
                     }
                 }
                 break;
@@ -246,77 +248,79 @@ static void vServerTask(void *pvParameters) {
             }
         }
         //ESP_LOGW("vSTsk", "sock fd");
-        if(tl_this.tlfds[TL_TSK_SOCKET_FD].fd != -1) {
-            int pollResult = poll(tl_this.tlfds, ((tl_this.tlfds[TL_TSK_CLIENT_FD].fd != -1) ? 2 : 1), 1 / portTICK_PERIOD_MS );
+        if(tl_this->tlfds[TL_TSK_SOCKET_FD].fd != -1) {
+            int pollResult = poll(tl_this->tlfds, ((tl_this->tlfds[TL_TSK_CLIENT_FD].fd != -1) ? 2 : 1), 1 / portTICK_PERIOD_MS );
             if(pollResult > 0) {
-                if(tl_this.tlfds[TL_TSK_SOCKET_FD].revents & POLLIN) {
-                    if(tl_this.tlfds[TL_TSK_CLIENT_FD].fd == -1 ) {
+                if(tl_this->tlfds[TL_TSK_SOCKET_FD].revents & POLLIN) {
+                    if(tl_this->tlfds[TL_TSK_CLIENT_FD].fd == -1 ) {
                         struct tl_udata *udata = (struct tl_udata *)malloc(sizeof(struct tl_udata));
-                        tl_this.tlfds[TL_TSK_CLIENT_FD].fd = accept(tl_this.tlfds[TL_TSK_SOCKET_FD].fd, (struct sockaddr *)&cliAddr, &cliAddrLen);
-                        tl_this.handle = telnet_init(cln_opt, tl_event_handler, 0, udata);
-                        tl_this.tty.ttype = NULL;
-                        if(tl_this.handle != NULL) {
-                            tl_this.tlfds[TL_TSK_CLIENT_FD].events = POLLIN;
-                            tl_this.tl_srv_state = TL_SRV_CLIENT_CONNECTED;
+                        tl_this->tlfds[TL_TSK_CLIENT_FD].fd = accept(tl_this->tlfds[TL_TSK_SOCKET_FD].fd, (struct sockaddr *)&cliAddr, &cliAddrLen);
+                        tl_this->handle = telnet_init(cln_opt, tl_event_handler, 0, udata);
+                        tl_this->tty.ttype = NULL;
+                        if(tl_this->handle != NULL) {
+                            tl_this->tlfds[TL_TSK_CLIENT_FD].events = POLLIN;
+                            tl_this->tl_srv_state = TL_SRV_CLIENT_CONNECTED;
+                            //ESP_LOGI("addr", "%08lX", cliAddr.sin_addr.s_addr);
+                            ESP_LOGE("post", "%s", esp_err_to_name(tl_event_post(TLSRV_EVENT_CLIENT_CONNECT, &cliAddr.sin_addr.s_addr, sizeof(uint32_t))));
                             static const unsigned char SEND[] = { TELNET_IAC, TELNET_WILL, TELNET_TELOPT_ECHO };
-                            send(tl_this.tlfds[TL_TSK_CLIENT_FD].fd, (char *)SEND, sizeof(SEND), 0);
+                            send(tl_this->tlfds[TL_TSK_CLIENT_FD].fd, (char *)SEND, sizeof(SEND), 0);
                             /* linenoise */
-                            tl_this.tty.ls = (struct linenoiseState *)malloc(sizeof(struct linenoiseState));
-                            tl_this.tty.line = (char *)malloc(sizeof(char) * LN_MAX_LINE_SIZE);
-                            linenoiseEditStart(tl_this.tty.ls, tl_this.tty.line, LN_MAX_LINE_SIZE, "esp32# ");
+                            tl_this->tty.ls = (struct linenoiseState *)malloc(sizeof(struct linenoiseState));
+                            tl_this->tty.line = (char *)malloc(sizeof(char) * LN_MAX_LINE_SIZE);
+                            linenoiseEditStart(tl_this->tty.ls, tl_this->tty.line, LN_MAX_LINE_SIZE, "esp32# ");
                             /* end */
                         } else {
-                            write(tl_this.tlfds[TL_TSK_CLIENT_FD].fd, reject_msg, 1+strlen(reject_msg));
+                            write(tl_this->tlfds[TL_TSK_CLIENT_FD].fd, reject_msg, 1+strlen(reject_msg));
                             ESP_LOGE("tln", "handler error");
-                            shutdown(tl_this.tlfds[TL_TSK_CLIENT_FD].fd, 2);
-                            close(tl_this.tlfds[TL_TSK_CLIENT_FD].fd);
+                            shutdown(tl_this->tlfds[TL_TSK_CLIENT_FD].fd, 2);
+                            close(tl_this->tlfds[TL_TSK_CLIENT_FD].fd);
                         }
                         
                     } else {
-                        int fd_drop = accept(tl_this.tlfds[TL_TSK_SOCKET_FD].fd, (struct sockaddr *)&cliAddr, &cliAddrLen);
+                        int fd_drop = accept(tl_this->tlfds[TL_TSK_SOCKET_FD].fd, (struct sockaddr *)&cliAddr, &cliAddrLen);
                         write(fd_drop, reject_msg, 1+strlen(reject_msg));
                         shutdown(fd_drop,2);
                         close(fd_drop);
                     }
                 }
-                if(tl_this.tlfds[TL_TSK_CLIENT_FD].fd != -1 ) {
-                    if(tl_this.tlfds[TL_TSK_CLIENT_FD].revents & POLLIN) {
-                        ssize_t len = recv(tl_this.tlfds[TL_TSK_CLIENT_FD].fd, (char *)recv_data, sizeof(recv_data), 0);
+                if(tl_this->tlfds[TL_TSK_CLIENT_FD].fd != -1 ) {
+                    if(tl_this->tlfds[TL_TSK_CLIENT_FD].revents & POLLIN) {
+                        ssize_t len = recv(tl_this->tlfds[TL_TSK_CLIENT_FD].fd, (char *)recv_data, sizeof(recv_data), 0);
                         if( len == 0 ) {
-                            telnet_free(tl_this.handle);
-                            shutdown(tl_this.tlfds[TL_TSK_CLIENT_FD].fd, 2);
-                            close(tl_this.tlfds[TL_TSK_CLIENT_FD].fd);
-                            tl_this.tlfds[TL_TSK_CLIENT_FD].fd = -1;
-                            free(tl_this.tty.ttype);
-                            free(tl_this.tty.ls);
-                            free(tl_this.tty.line);
+                            telnet_free(tl_this->handle);
+                            shutdown(tl_this->tlfds[TL_TSK_CLIENT_FD].fd, 2);
+                            close(tl_this->tlfds[TL_TSK_CLIENT_FD].fd);
+                            tl_this->tlfds[TL_TSK_CLIENT_FD].fd = -1;
+                            free(tl_this->tty.ttype);
+                            free(tl_this->tty.ls);
+                            free(tl_this->tty.line);
                             freeHistory();
-                            tl_this.tty.ttype = NULL;
-                            tl_this.tty.ls = NULL;
-                            tl_this.tty.line = NULL;
-                            tl_this.tl_srv_state = TL_SRV_LISTEN;
-                        } else { telnet_recv(tl_this.handle, (char *)recv_data, len); }
+                            tl_this->tty.ttype = NULL;
+                            tl_this->tty.ls = NULL;
+                            tl_this->tty.line = NULL;
+                            tl_this->tl_srv_state = TL_SRV_LISTEN;
+                        } else { telnet_recv(tl_this->handle, (char *)recv_data, len); }
                     }
                 }
             }
-            if(tl_this.tlfds[TL_TSK_CLIENT_FD].fd != -1) {
+            if(tl_this->tlfds[TL_TSK_CLIENT_FD].fd != -1) {
                 if(!mem_queue_isempty()) {
                 //    char *buf = (char *)malloc(MEM_QUEUE_SIZE);
                 //    int count = mem_queue_get(buf, MEM_QUEUE_SIZE-1);
                 //    buf[count] = 0x00;
                 //    ESP_LOGI("tlev", "%s", buf);
                 //    free(buf);
-                    tl_this.tty.ln_line = linenoiseEditFeed(tl_this.tty.ls);
-                    if(tl_this.tty.ln_line != linenoiseEditMore) {
-                        linenoiseEditStop(tl_this.tty.ls);
-                        if(tl_this.tty.ln_line == NULL) {
+                    tl_this->tty.ln_line = linenoiseEditFeed(tl_this->tty.ls);
+                    if(tl_this->tty.ln_line != linenoiseEditMore) {
+                        linenoiseEditStop(tl_this->tty.ls);
+                        if(tl_this->tty.ln_line == NULL) {
                             ESP_LOGI("ln", "Empty line");
                         } else {
-                            ESP_LOGW("ln", "%s", tl_this.tty.ln_line);
-                            linenoiseHistoryAdd(tl_this.tty.ln_line);
+                            ESP_LOGW("ln", "%s", tl_this->tty.ln_line);
+                            linenoiseHistoryAdd(tl_this->tty.ln_line);
                         }
-                        linenoiseFree(tl_this.tty.ln_line); /* In final - just free line buffer */
-                        linenoiseEditStart(tl_this.tty.ls, tl_this.tty.line, LN_MAX_LINE_SIZE, "esp32# ");
+                        linenoiseFree(tl_this->tty.ln_line); /* In final - just free line buffer */
+                        linenoiseEditStart(tl_this->tty.ls, tl_this->tty.line, LN_MAX_LINE_SIZE, "esp32# ");
                         //ESP_LOGI("ln", "Finished line Exit");
                     }
                 }
@@ -330,7 +334,7 @@ static void vServerTask(void *pvParameters) {
 void tl_event_handler(telnet_t *thisClient, telnet_event_t *event, void *client) {
     switch(event->type) {
         case TELNET_EV_SEND:
-            send(tl_this.tlfds[TL_TSK_CLIENT_FD].fd, event->data.buffer, event->data.size, 0);
+            send(tl_this->tlfds[TL_TSK_CLIENT_FD].fd, event->data.buffer, event->data.size, 0);
             break;
         case TELNET_EV_DATA:
             //ESP_LOGE("tlev:data", "Received %.*s", event->data.size, event->data.buffer);
@@ -366,12 +370,12 @@ void tl_event_handler(telnet_t *thisClient, telnet_event_t *event, void *client)
                     break;
 
                 case TELNET_TELOPT_NAWS:
-                    tl_this.tty.rows = event->sub.buffer[3];
-                    tl_this.tty.cols = event->sub.buffer[1];
-                    if(tl_this.tl_srv_state == TL_SRV_CLIENT_CONNECTED) {
-                        //linenoiseHide(tl_this.tty.ls);
-                        tl_this.tty.ls->cols = tl_this.tty.cols;
-                        //linenoiseShow(tl_this.tty.ls);
+                    tl_this->tty.rows = event->sub.buffer[3];
+                    tl_this->tty.cols = event->sub.buffer[1];
+                    if(tl_this->tl_srv_state == TL_SRV_CLIENT_CONNECTED) {
+                        //linenoiseHide(tl_this->tty.ls);
+                        tl_this->tty.ls->cols = tl_this->tty.cols;
+                        //linenoiseShow(tl_this->tty.ls);
                     }
                     //ESP_LOGI("tlev", "Set cols %d, %d, %d, %d", event->sub.buffer[0], event->sub.buffer[1], event->sub.buffer[2], event->sub.buffer[3]);
                     break;
@@ -381,8 +385,8 @@ void tl_event_handler(telnet_t *thisClient, telnet_event_t *event, void *client)
             }
             break;
         case TELNET_EV_TTYPE:
-            tl_this.tty.ttype = (char *)calloc(1,strlen(event->ttype.name)+1);
-            strcpy(tl_this.tty.ttype, event->ttype.name);
+            tl_this->tty.ttype = (char *)calloc(1,strlen(event->ttype.name)+1);
+            strcpy(tl_this->tty.ttype, event->ttype.name);
             break;
 
         default:
@@ -395,29 +399,40 @@ esp_err_t tl_server_init(esp_event_loop_handle_t *p_uevent_loop) {
 
     const char *tag = "tls:init";
 
-    tl_this.tlfds[TL_TSK_SOCKET_FD].fd = -1;
-    tl_this.tlfds[TL_TSK_CLIENT_FD].fd = -1;
-    tl_this.tl_srv_state = TL_SRV_NOACT;
-    tl_this.tty.cols = 80;
-    tl_this.tty.rows =24;
+    tl_this = (tl_data_t *)calloc(1, sizeof(tl_data_t));
+    if(!tl_this) return ESP_FAIL;
 
-    tl_this.tty.ls = NULL;
-    tl_this.tty.line = NULL;
+    tl_this->p_uevent_loop = (p_uevent_loop) ? p_uevent_loop : NULL;
+    if(tl_this->p_uevent_loop) ESP_LOGI(tag, "p_uevent_loop OK");
 
-    tl_this.tl_queue = xQueueCreate(5, sizeof(tl_queue_data_t));
-    tl_this.q_cmd = (tl_queue_data_t *)malloc(sizeof(tl_queue_data_t));
-    if((!tl_this.tl_queue) || (!tl_this.q_cmd)) {
+    tl_this->tlfds[TL_TSK_SOCKET_FD].fd = -1;
+    tl_this->tlfds[TL_TSK_CLIENT_FD].fd = -1;
+    tl_this->tl_srv_state = TL_SRV_NOACT;
+    tl_this->tty.cols = 80;
+    tl_this->tty.rows =24;
+
+    tl_this->tty.ls = NULL;
+    tl_this->tty.line = NULL;
+
+    tl_this->tl_queue = xQueueCreate(5, sizeof(tl_queue_data_t));
+    tl_this->q_cmd = (tl_queue_data_t *)malloc(sizeof(tl_queue_data_t));
+    if((!tl_this->tl_queue) || (!tl_this->q_cmd)) {
         ESP_LOGE(tag, "Queue");
         return ESP_FAIL;
     }
 
     mem_queue_init();
-    xTaskCreate(vServerTask, "tlnsrv", 4096, NULL, 15, &tl_this.srv_tsk_handle);
+    xTaskCreate(vServerTask, "tlnsrv", 4096, NULL, 15, &tl_this->srv_tsk_handle);
     return ESP_OK;
 }
 
 QueueHandle_t tl_get_cmd_handle() {
-    return tl_this.tl_queue;
+    return tl_this->tl_queue;
+}
+
+static esp_err_t tl_event_post(int32_t event_id, const void *event_data, size_t event_data_size) {
+    if(tl_this->p_uevent_loop) ESP_LOGI("post", "p_uevent_loop OK");
+    return (tl_this->p_uevent_loop) ? esp_event_post_to(tl_this->p_uevent_loop, TLSRV_EVENT, event_id, event_data, event_data_size, 1) : ESP_OK;
 }
 
 /* Memory queue*/
@@ -500,7 +515,7 @@ struct abuf {
 
 static void tl_send_new_line()
 {
-    telnet_send(tl_this.handle, "\r\n", 2);
+    telnet_send(tl_this->handle, "\r\n", 2);
 }
 
 static void abInit(struct abuf *ab) {
@@ -573,7 +588,7 @@ static void refreshSingleLine(struct linenoiseState *l, int flags) {
     }
 
     //if (write(fd,ab.b,ab.len) == -1) {} /* Can't recover from write error. */
-    telnet_send(tl_this.handle, ab.b, ab.len);
+    telnet_send(tl_this->handle, ab.b, ab.len);
     abFree(&ab);
 }
 
@@ -676,7 +691,7 @@ static void refreshMultiLine(struct linenoiseState *l, int flags) {
     l->oldpos = l->pos;
 
     //if (write(fd,ab.b,ab.len) == -1) {} /* Can't recover from write error. */
-    telnet_send(tl_this.handle, ab.b, ab.len);
+    telnet_send(tl_this->handle, ab.b, ab.len);
     abFree(&ab);
 }
 
@@ -726,7 +741,7 @@ int linenoiseEditInsert(struct linenoiseState *l, char c) {
                  * trivial case. */
                 char d = (maskmode==1) ? '*' : c;
                 //if (write(l->ofd,&d,1) == -1) return -1;
-                telnet_send(tl_this.handle, &d, 1);
+                telnet_send(tl_this->handle, &d, 1);
             } else {
                 refreshLine(l);
             }
@@ -900,7 +915,7 @@ int linenoiseEditStart(struct linenoiseState *l, char *buf, size_t buflen, const
     l->plen = strlen(prompt);
     l->oldpos = l->pos = 0;
     l->len = 0;
-    l->cols = tl_this.tty.cols; //getColumns(stdin_fd, stdout_fd);
+    l->cols = tl_this->tty.cols; //getColumns(stdin_fd, stdout_fd);
     l->oldrows = 0;
     l->history_index = 0;
 
@@ -921,7 +936,7 @@ int linenoiseEditStart(struct linenoiseState *l, char *buf, size_t buflen, const
     linenoiseHistoryAdd("");
 
     //if (write(l->ofd,prompt,l->plen) == -1) return -1;
-    telnet_send(tl_this.handle, prompt, l->plen);
+    telnet_send(tl_this->handle, prompt, l->plen);
     return 0;
 }
 
@@ -1110,7 +1125,7 @@ void linenoiseClearScreen(void) {
     //if (write(STDOUT_FILENO,"\x1b[H\x1b[2J",7) <= 0) {
         /* nothing to do, just to avoid warning. */
     //}
-    telnet_send(tl_this.handle, "\x1b[H\x1b[2J",7);
+    telnet_send(tl_this->handle, "\x1b[H\x1b[2J",7);
 }
 
 /* Set if to use or not the multi line mode. */
