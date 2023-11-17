@@ -42,7 +42,7 @@ typedef struct tl_client {
 } tl_client_t;
 
 typedef struct tl_data {
-    esp_event_loop_handle_t uevent_loop; //?????????????
+    esp_event_loop_handle_t uevent_loop;
     telnet_t *handle;
     //tl_client_t tl_cln;
     tl_srv_state_t tl_srv_state;
@@ -56,6 +56,7 @@ typedef struct tl_data {
         struct linenoiseState *ls;
         char *line;
         char *ln_line;
+        char *prompt;
     } tty;
     struct pollfd tlfds[2];
 } tl_data_t;
@@ -91,6 +92,7 @@ typedef struct mem_queue_storage {
     int head;
     int tail;
     size_t allocated;
+    SemaphoreHandle_t xSemaphore;
 } mem_queue_storage_t;
 
 static mem_queue_storage_t *mem_queue = NULL;
@@ -232,7 +234,7 @@ static void vServerTask(void *pvParameters) {
                             ESP_LOGE(tag, "listen %d (%s)", errno, strerror(errno));    
                         } else {
                             tl_this->tl_srv_state = TL_SRV_LISTEN;
-                            //esp_event_post_to(tl_this->p_uevent_loop, TLSRV_EVENT, TLSRV_EVENT_SERVER_START, &srv_addr.sin_addr.s_addr, sizeof(uint32_t), 1);
+                            tl_event_post(TLSRV_EVENT_SERVER_START, NULL, 0);
                             break;
                         }
                     }
@@ -261,7 +263,7 @@ static void vServerTask(void *pvParameters) {
                             tl_this->tlfds[TL_TSK_CLIENT_FD].events = POLLIN;
                             tl_this->tl_srv_state = TL_SRV_CLIENT_CONNECTED;
                             //ESP_LOGI("addr", "%08lX", cliAddr.sin_addr.s_addr);
-                            ESP_LOGE("post", "%s", esp_err_to_name(tl_event_post(TLSRV_EVENT_CLIENT_CONNECT, &cliAddr.sin_addr.s_addr, sizeof(uint32_t))));
+                            tl_event_post(TLSRV_EVENT_CLIENT_CONNECT, &cliAddr.sin_addr.s_addr, sizeof(uint32_t));
                             static const unsigned char SEND[] = { TELNET_IAC, TELNET_WILL, TELNET_TELOPT_ECHO };
                             send(tl_this->tlfds[TL_TSK_CLIENT_FD].fd, (char *)SEND, sizeof(SEND), 0);
                             /* linenoise */
@@ -295,11 +297,14 @@ static void vServerTask(void *pvParameters) {
                             free(tl_this->tty.ls);
                             free(tl_this->tty.line);
                             freeHistory();
+                            tl_event_post(TLSRV_EVENT_CLIENT_DISCONNECT, NULL, 0);
                             tl_this->tty.ttype = NULL;
                             tl_this->tty.ls = NULL;
                             tl_this->tty.line = NULL;
                             tl_this->tl_srv_state = TL_SRV_LISTEN;
-                        } else { telnet_recv(tl_this->handle, (char *)recv_data, len); }
+                        } 
+                        if(len > 0) { telnet_recv(tl_this->handle, (char *)recv_data, len); }
+                        //else { ESP_LOGE("recv", "failed");}
                     }
                 }
             }
@@ -313,21 +318,17 @@ static void vServerTask(void *pvParameters) {
                     tl_this->tty.ln_line = linenoiseEditFeed(tl_this->tty.ls);
                     if(tl_this->tty.ln_line != linenoiseEditMore) {
                         linenoiseEditStop(tl_this->tty.ls);
-                        if(tl_this->tty.ln_line == NULL) {
-                            ESP_LOGI("ln", "Empty line");
+                        if(tl_this->tty.ln_line == NULL) { /* Empty line returned */
                         } else {
-                            ESP_LOGW("ln", "%s", tl_this->tty.ln_line);
+                            tl_event_post(TLSRV_EVENT_LINE_TYPED, tl_this->tty.ln_line, strlen(tl_this->tty.ln_line)+1);
                             linenoiseHistoryAdd(tl_this->tty.ln_line);
                         }
                         linenoiseFree(tl_this->tty.ln_line); /* In final - just free line buffer */
                         linenoiseEditStart(tl_this->tty.ls, tl_this->tty.line, LN_MAX_LINE_SIZE, "esp32# ");
-                        //ESP_LOGI("ln", "Finished line Exit");
                     }
                 }
             }
-            //ESP_LOGI("ln", "Finished memq");
         }
-        //ESP_LOGI("ln", "Finished sock fd");
     }    
 }
 
@@ -402,9 +403,7 @@ esp_err_t tl_server_init(esp_event_loop_handle_t *p_uevent_loop) {
     tl_this = (tl_data_t *)calloc(1, sizeof(tl_data_t));
     if(!tl_this) return ESP_FAIL;
 
-    tl_this->p_uevent_loop = (p_uevent_loop) ? p_uevent_loop : NULL;
-    if(tl_this->p_uevent_loop) ESP_LOGI(tag, "p_uevent_loop OK");
-
+    tl_this->uevent_loop = (p_uevent_loop) ? *p_uevent_loop : NULL; /* If NULL send to default event loop */
     tl_this->tlfds[TL_TSK_SOCKET_FD].fd = -1;
     tl_this->tlfds[TL_TSK_CLIENT_FD].fd = -1;
     tl_this->tl_srv_state = TL_SRV_NOACT;
@@ -426,13 +425,22 @@ esp_err_t tl_server_init(esp_event_loop_handle_t *p_uevent_loop) {
     return ESP_OK;
 }
 
-QueueHandle_t tl_get_cmd_handle() {
+QueueHandle_t tl_get_cmd_handle(void) {
     return tl_this->tl_queue;
 }
 
+void tl_printf(const char *fmt, ...) {
+    va_list va;
+    linenoiseHide(tl_this->tty.ls);
+    va_start(va, fmt);
+    telnet_vprintf(tl_this->handle, fmt, va);
+    va_end(va);
+    linenoiseShow(tl_this->tty.ls);
+}
+
 static esp_err_t tl_event_post(int32_t event_id, const void *event_data, size_t event_data_size) {
-    if(tl_this->p_uevent_loop) ESP_LOGI("post", "p_uevent_loop OK");
-    return (tl_this->p_uevent_loop) ? esp_event_post_to(tl_this->p_uevent_loop, TLSRV_EVENT, event_id, event_data, event_data_size, 1) : ESP_OK;
+    return (tl_this->uevent_loop) ? esp_event_post_to(tl_this->uevent_loop, TLSRV_EVENT, event_id, event_data, event_data_size, 1) 
+                                  : esp_event_post(TLSRV_EVENT, event_id, event_data, event_data_size, 1);
 }
 
 /* Memory queue*/
@@ -440,6 +448,7 @@ int mem_queue_get( char *buf, size_t len) {
     int bytes = -1;
     if( mem_queue_init() != ESP_OK ) { return -1; }
     if(!mem_queue_isempty()) {
+        while( xSemaphoreTake(mem_queue->xSemaphore, (TickType_t) 10) != pdTRUE ) {}
         if(mem_queue->tail >= (mem_queue->head + len - 1) ) {
             memcpy(buf, (mem_queue->holder+mem_queue->head), len);
             mem_queue->head += len;
@@ -458,6 +467,7 @@ int mem_queue_get( char *buf, size_t len) {
                 mem_queue->allocated = MEM_QUEUE_SIZE;
             }
         }
+        xSemaphoreGive(mem_queue->xSemaphore);
         return bytes;
     }
     return 0;
@@ -467,6 +477,7 @@ void mem_queue_put( char *buf, size_t len) {
     if( mem_queue_init() != ESP_OK ) return;
     if(mem_queue->tail == -1) { mem_queue->head = 0; }
     //ESP_LOGE("memq", "%d {%d:%d}", mem_queue->allocated, mem_queue->head, mem_queue->tail);
+    while( xSemaphoreTake(mem_queue->xSemaphore, (TickType_t) 10) != pdTRUE ) {}
     if((mem_queue->allocated - mem_queue->tail)<len) {
         size_t new_size = len + mem_queue->tail + 1;
         //ESP_LOGW("memq", "%d {%d:%d} %d", mem_queue->allocated, mem_queue->head, mem_queue->tail, new_size);
@@ -483,6 +494,7 @@ void mem_queue_put( char *buf, size_t len) {
     mem_queue->tail++;
     memcpy((mem_queue->holder+mem_queue->tail), buf, len);
     mem_queue->tail += len-1;
+    xSemaphoreGive(mem_queue->xSemaphore);
 }
 
 bool mem_queue_isempty() {
@@ -498,7 +510,9 @@ bool mem_queue_isempty() {
 esp_err_t mem_queue_init() {
     if(mem_queue) return ESP_OK;
     mem_queue = (mem_queue_storage_t *)malloc(sizeof(mem_queue_storage_t));
-    *mem_queue = (mem_queue_storage_t) {NULL, -1, -1, MEM_QUEUE_SIZE};
+    *mem_queue = (mem_queue_storage_t) {NULL, -1, -1, MEM_QUEUE_SIZE, NULL};
+    mem_queue->xSemaphore = xSemaphoreCreateBinary();
+    xSemaphoreGive(mem_queue->xSemaphore);
     return (!(mem_queue->holder = (char *)malloc(MEM_QUEUE_SIZE))) ? ESP_FAIL : ESP_OK;
 }
 
@@ -967,8 +981,8 @@ char *linenoiseEditFeed(struct linenoiseState *l) {
     switch(c) {
     case ENTER:    /* enter */
         history_len--;
-        free(history[history_len]);
         mem_queue_get(seq, 1);      /* Get 0x00 from telnet */
+        free(history[history_len]);
         if (mlmode) linenoiseEditMoveEnd(l);
         if (hintsCallback) {
             /* Force a refresh without hints to leave the previous

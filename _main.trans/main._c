@@ -12,6 +12,9 @@
 
 #include <sys/poll.h>
 
+#include <driver/gpio.h>
+#include <driver/ledc.h>
+
 void main_pause() {
     for (int i = 5; i >= 0; i--) {
         printf("Pause. %d seconds left\n", i);
@@ -20,38 +23,21 @@ void main_pause() {
 }
 esp_event_loop_handle_t *p_uevent_loop;
 
-char buff[]="qwer\nasd\n";
-
-int telnetSocket;
-
 static void u_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
     if(WM_EVENT ==  event_base ){
         if( event_id == WM_EVENT_NETIF_GOT_IP ) {
             ESP_LOGW("main", "WM_EVENT_NETIF_GOT_IP");
             esp_netif_t *test_netif=esp_netif_get_default_netif();
             if(test_netif == NULL) {
-                ESP_LOGE("probe:netif", "No active netif");
+                //ESP_LOGE("probe:netif", "No active netif");
             } else {
-                ESP_LOGE("probe:ifkey", "%s", esp_netif_get_ifkey(test_netif));
+                //ESP_LOGE("probe:ifkey", "%s", esp_netif_get_ifkey(test_netif));
             }
-            ESP_LOGE("event"," " IPSTR "/" IPSTR "/" IPSTR, IP2STR(&((esp_netif_ip_info_t *)event_data)->ip), IP2STR(&((esp_netif_ip_info_t *)event_data)->netmask), IP2STR(&((esp_netif_ip_info_t *)event_data)->gw));
+            //ESP_LOGE("event"," " IPSTR "/" IPSTR "/" IPSTR, IP2STR(&((esp_netif_ip_info_t *)event_data)->ip), IP2STR(&((esp_netif_ip_info_t *)event_data)->netmask), IP2STR(&((esp_netif_ip_info_t *)event_data)->gw));
             //ESP_LOGE("event","IP: " IPSTR, IP2STR(&((esp_netif_ip_info_t *)event_data)->ip));
-            /*if(telnetSocket == -1 ) {
-                telnetSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-                struct sockaddr_in serverAddr;
-                serverAddr.sin_family = AF_INET;
-                serverAddr.sin_addr.s_addr = htonl(INADDR_ANY);
-                serverAddr.sin_port = htons(23);
-                ESP_LOGW("main", "bind");
-                int rc = bind(telnetSocket, (struct sockaddr *)&serverAddr, sizeof(serverAddr));
-                if (rc<0) {
-                    ESP_LOGE("socket", "bind %d (%s)", errno, strerror(errno));
-                }
-                ESP_LOGW("main", "listen");
-                listen(telnetSocket,1);
-            }*/
+            
             QueueHandle_t cmd_h = tl_get_cmd_handle();
-            tl_cmds_e cmd = TL_START;
+            tl_cmds_e cmd = TL_CMD_START;
             if(cmd_h) {
                 if(pdTRUE != xQueueSend(cmd_h, (void *)&cmd, (TickType_t) 10)) {
                     ESP_LOGE("main", "TL_START sent");    
@@ -75,26 +61,54 @@ static void u_event_handler(void* arg, esp_event_base_t event_base, int32_t even
     }
 }
 
+static void tl_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
+    static char *tag = "tlsrv:ev";
+    if(TLSRV_EVENT ==  event_base ) {
+        switch(event_id) {
+            case TLSRV_EVENT_CLIENT_CONNECT:
+                ESP_LOGI(tag," " IPSTR " ", IP2STR((esp_ip4_addr_t *)event_data));
+                break;
+            case TLSRV_EVENT_LINE_TYPED:
+                ESP_LOGW(tag, "Line typed %s", (char *)event_data);
+                multi_heap_info_t *heap_stats = (multi_heap_info_t *)malloc(sizeof(multi_heap_info_t));
+                heap_caps_get_info(heap_stats, MALLOC_CAP_DEFAULT);
+                printf("%u : %u\n", heap_stats->total_free_bytes, heap_stats->total_allocated_bytes);
+                tl_printf("%u : %u\n", heap_stats->total_free_bytes, heap_stats->total_allocated_bytes);
+                free(heap_stats); //:-)
+                break;
+            default:
+                ESP_LOGE(tag,"Event ID: %lu", event_id);
+            }
+    }
+}
+
 void app_main(void)
 {
+    printf("xTaskGetTickCount %lu\n", xTaskGetTickCount());
+    printf("xTaskGetTickCount %u\n", xthal_get_ccount());
     printf("test\n");
 
     p_uevent_loop = (esp_event_loop_handle_t *)malloc(sizeof(esp_event_loop_handle_t));
     esp_event_loop_args_t uevent_args = {
         .queue_size = 5,
         .task_name = "uevloop",
-        .task_priority = 15,
-        .task_stack_size = 3072,
+        .task_priority = 19,
+        .task_stack_size = 4096,
         .task_core_id = tskNO_AFFINITY
     };
     esp_err_t err;
     err = esp_event_loop_create(&uevent_args, p_uevent_loop);
+    err = esp_event_loop_create_default();
     
-    esp_event_handler_register_with(*p_uevent_loop, WM_EVENT, ESP_EVENT_ANY_ID, u_event_handler, NULL);
+    //esp_event_handler_instance_register_with(*p_uevent_loop, WM_EVENT, ESP_EVENT_ANY_ID, u_event_handler, NULL, NULL);
+    //esp_event_handler_instance_register_with(*p_uevent_loop, TLSRV_EVENT, ESP_EVENT_ANY_ID, tl_event_handler, NULL, NULL);
+
+    esp_event_handler_instance_register(WM_EVENT, ESP_EVENT_ANY_ID, u_event_handler, NULL, NULL);
+    esp_event_handler_instance_register(TLSRV_EVENT, ESP_EVENT_ANY_ID, tl_event_handler, NULL, NULL);
+
     wm_wifi_connection_data_t *test = (wm_wifi_connection_data_t *)calloc(1, sizeof(wm_wifi_connection_data_t));
-    if(tl_server_init() == ESP_OK) {
-        ESP_LOGE("main", "telnet ok");    
-    }
+    if(tl_server_init(p_uevent_loop) != ESP_OK) { ESP_LOGE("main", "telnet nok");}
+    tl_server_init(NULL);
     wm_init_wifi_connection_data( test );
 
     //tl_server_init(p_uevent_loop, WM_EVENT, WM_EVENT_NETIF_GOT_IP);
@@ -111,7 +125,8 @@ void app_main(void)
         .pri_dns_server = { IPADDR_ANY }
     };
 
-    wm_init_wifi_manager(test, p_uevent_loop);
+    //wm_init_wifi_manager(test, p_uevent_loop);
+    wm_init_wifi_manager(test, NULL);
     
     test->ap_mode = (wm_wifi_base_config_t){
         .wifi_ssid = "guess.the.pussybilities", .wifi_password = "1234567890",
@@ -124,35 +139,90 @@ void app_main(void)
     //main_pause();
     wm_add_known_network_config( &test->ap_mode );
     wm_add_known_network("Mi Phone", "");
-    /*
-    struct pollfd tlfds[2];
-    
-    while(telnetSocket == -1) {
-        vTaskDelay(10 / portTICK_PERIOD_MS);    
-    }
 
-    tlfds[0].fd = telnetSocket;
-    tlfds[1].events = POLLIN;
-
-    int pollResult = 0;
-    while( pollResult == 0 ) {
-        pollResult = poll(tlfds, 1, 10 / portTICK_PERIOD_MS );
-        if(pollResult > 0) {
-            ESP_LOGW("poll", "result");
-            if(tlfds[0].revents & POLLIN) {
-                struct sockaddr_in cliAddr;
-                socklen_t cliAddrLen = (socklen_t)sizeof(cliAddr);
-                int fdcliSocket = accept(telnetSocket, (struct sockaddr *)&cliAddr, &cliAddrLen);
-                ESP_LOGE("tln", "connection ftom %s", inet_ntoa(cliAddr.sin_addr));
-            }
-        }
-    }
-    */
+    ESP_LOGI("tick", "%lu", xTaskGetTickCount());
+    printf("xTaskGetTickCount %lu\n", xTaskGetTickCount());
+    printf("xTaskGetTickCount %u\n", xthal_get_ccount());
     main_pause();
-    
+    printf("xTaskGetTickCount %lu\n", xTaskGetTickCount());
+    printf("xTaskGetTickCount %u\n", xthal_get_ccount());
+    ESP_LOGI("tick", "%lu", xTaskGetTickCount());
+    TickType_t a = 0xfffffffe;
+    TickType_t b = 0x00000002;
+    ESP_LOGI("tick","b - a = %lu", b - a);
     //void wm_change_ap_mode_config( wifi_base_config_t *pWifiConn );
     //wifi_base_config_t *baseconf = (wifi_base_config_t *)calloc(1, sizeof(wifi_base_config_t));
     //strcpy(baseconf->wifi_ssid, "wm_change_ap_mode_config");
     //ESP_LOGE("main", "%s", CONFIG_WIFIMGR_COUNTRY_CODE);
 
+    #define LEDC_TIMER              LEDC_TIMER_0
+    #define LEDC_MODE               LEDC_HIGH_SPEED_MODE
+    #define LEDC_OUTPUT_IO          (GPIO_NUM_19)
+    #define LEDC_CHANNEL            LEDC_CHANNEL_0
+    #define LEDC_DUTY_RES           LEDC_TIMER_13_BIT // Set duty resolution to 13 bits
+    #define LEDC_DUTY               (1024) // Set duty to 50%. ((2 ** 13) - 1) * 50% = 4095
+    #define LEDC_FREQUENCY          (5000) // Frequency in Hertz. Set frequency at 5 kHz
+
+    //while(1) {
+        ledc_timer_config_t ledc_timer = {
+            .speed_mode       = LEDC_MODE,
+            .timer_num        = LEDC_TIMER,
+            .duty_resolution  = LEDC_DUTY_RES,
+            .freq_hz          = LEDC_FREQUENCY,  // Set output frequency at 5 kHz
+            .clk_cfg          = LEDC_AUTO_CLK
+        };
+
+        ledc_channel_config_t ledc_channel = {
+            .speed_mode     = LEDC_MODE,
+            .channel        = LEDC_CHANNEL,
+            .timer_sel      = LEDC_TIMER,
+            .intr_type      = LEDC_INTR_DISABLE,
+            .gpio_num       = LEDC_OUTPUT_IO,
+            .duty           = 0, // Set duty to 0%
+            .hpoint         = 0
+        };
+
+        ledc_timer_config(&ledc_timer);
+        ledc_channel_config(&ledc_channel);
+
+        ledc_fade_func_install(0);
+
+        //ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, LEDC_DUTY);
+        //ledc_update_duty(LEDC_MODE, LEDC_CHANNEL);
+        //vTaskDelay(1000 / portTICK_PERIOD_MS);
+        ledc_set_fade_time_and_start(LEDC_MODE, LEDC_CHANNEL, 1024, 1500, LEDC_FADE_NO_WAIT);
+
+        //ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, 0);
+        //ledc_update_duty(LEDC_MODE, LEDC_CHANNEL);
+        //vTaskDelay(250 / portTICK_PERIOD_MS);
+
+    //}
+    typedef enum {
+        LEDMGR_NO_FADE = 0,
+        LEDMGR_FAST_FADE = 500,
+        LEDMGR_SLOW_FADE = 1000
+    } lm_fade_speed_t;
+
+    typedef enum {
+        LEDMGR_SHORT = 250,
+        LEDMGR_LONG = 500,
+        LEDMGR_VLONG = 1000
+    } lm_interval_t;
+        
+    typedef struct lm_led_state {
+        short intensity;
+        lm_fade_speed_t fade_time;
+        lm_interval_t time;
+    } lm_led_state_t;
+
+    lm_led_state_t led_pgm[] = {
+        {2048, LEDMGR_SLOW_FADE, LEDMGR_LONG},
+        {512, LEDMGR_SLOW_FADE, LEDMGR_LONG},
+        {0, LEDMGR_NO_FADE, LEDMGR_LONG},
+        {4095, LEDMGR_NO_FADE, LEDMGR_SHORT},
+        {0, LEDMGR_NO_FADE, LEDMGR_SHORT},
+        {4095, LEDMGR_NO_FADE, LEDMGR_VLONG},
+        {0, LEDMGR_NO_FADE, LEDMGR_SHORT},
+        {-1, -1, -1}
+    };
 }

@@ -285,7 +285,8 @@ void wm_get_ap_config(wm_wifi_base_config_t *net_list) {
 }
 
 static esp_err_t wm_event_post(int32_t event_id, const void *event_data, size_t event_data_size) {
-    return (wm_config->event.uevent_loop) ? esp_event_post_to(wm_config->event.uevent_loop, WM_EVENT, event_id, event_data, event_data_size, 0) : ESP_OK;
+    return (wm_config->event.uevent_loop) ? esp_event_post_to(wm_config->event.uevent_loop, WM_EVENT, event_id, event_data, event_data_size, 1) 
+                                          : esp_event_post(WM_EVENT, event_id, event_data, event_data_size, 1);
 }
 
 esp_err_t wm_set_interface_ip( wifi_interface_t iface, wm_wifi_base_config_t *ip_info)
@@ -468,11 +469,12 @@ esp_err_t wm_init_wifi_manager( wm_wifi_connection_data_t *pInitConfig, esp_even
         return ESP_FAIL;
     };
 
-    if(p_uevent_loop != NULL) {wm_config->event.uevent_loop = *p_uevent_loop;}
+    //if(p_uevent_loop != NULL) {wm_config->event.uevent_loop = *p_uevent_loop;}
+    wm_config->event.uevent_loop = (p_uevent_loop) ? *p_uevent_loop : NULL;
 
     /* Create default event loop */
     err = esp_event_loop_create_default();
-    if( err != ESP_OK ) {
+    if((err != ESP_OK) && (err != ESP_ERR_INVALID_STATE)) {
         ESP_LOGE(ftag, "esp_event_loop_create_default (%s)", esp_err_to_name(err));
         return err; 
     }
@@ -494,11 +496,11 @@ esp_err_t wm_init_wifi_manager( wm_wifi_connection_data_t *pInitConfig, esp_even
             ESP_LOGE(ftag, "IP Address not changed");
         }
     }
-    if( wm_config->event.uevent_loop) {
-        esp_netif_ip_info_t *event_data = (esp_netif_ip_info_t *)malloc(sizeof(wifi_init_config_t));
-        esp_netif_get_ip_info( wm_config->ap.iface, event_data);
-        wm_event_post(WM_EVENT_NETIF_GOT_IP, event_data, sizeof(esp_netif_ip_info_t));
-    }
+    //if( wm_config->event.uevent_loop) {
+    esp_netif_ip_info_t *event_data = (esp_netif_ip_info_t *)malloc(sizeof(wifi_init_config_t));
+    esp_netif_get_ip_info( wm_config->ap.iface, event_data);
+    wm_event_post(WM_EVENT_NETIF_GOT_IP, event_data, sizeof(esp_netif_ip_info_t));
+    //}
     
     /* Init default WIFI configuration*/
     wifi_init_config_t *wifi_initconf = (wifi_init_config_t *)calloc(1, sizeof(wifi_init_config_t));

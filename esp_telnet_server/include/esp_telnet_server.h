@@ -16,6 +16,7 @@
 //#include "nvs_flash.h"
 #include "esp_event.h"
 //#include "freertos/event_groups.h"
+
 /*
 #define TS_LM_MODE          1
 #define TS_LM_FORWARDMASK   2
@@ -92,6 +93,7 @@ typedef struct tl_queue_data {
 } tl_queue_data_t;
 
 esp_err_t tl_server_init(esp_event_loop_handle_t *p_uevent_loop);
-QueueHandle_t tl_get_cmd_handle();
+QueueHandle_t tl_get_cmd_handle(void);
+void tl_printf(const char *fmt, ...);
 
 #endif /* _ESP_TELNET_SERVER_H_ */
