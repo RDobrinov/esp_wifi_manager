@@ -1,4 +1,5 @@
 #include "esp_wifi_manager.h"
+#include "esp_netif_sntp.h"
 #include "esp_log.h"
 
 #define WIFIMGR_CONNECTED_BIT  BIT0
@@ -89,6 +90,10 @@ static void vConnectTask(void *pvParameters) {
             }
         }
     }
+}
+
+static void wm_sntp_sync_cb(struct timeval *tv) {
+    wm_event_post(WM_EVENT_NETIF_GOT_TIME, tv, sizeof(struct timeval));
 }
 
 static void wm_wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
@@ -192,6 +197,7 @@ static void wm_wifi_event_handler(void* arg, esp_event_base_t event_base, int32_
                             wm_event_post(WM_EVENT_AP_START, NULL, 0);
                         }
                     }
+                    free(wifi_run_mode);
                 }
             }
             return;
@@ -218,6 +224,24 @@ static void wm_wifi_event_handler(void* arg, esp_event_base_t event_base, int32_
                     i = WIFIMGR_MAX_KNOWN_AP;
                 } else { i++; }
             }
+            esp_sntp_config_t *sntp_config = (esp_sntp_config_t *)malloc(sizeof(esp_sntp_config_t));
+            //*sntp_config = ESP_NETIF_SNTP_DEFAULT_CONFIG_MULTIPLE(3, ESP_SNTP_SERVER_LIST("pool.ntp.org", "time.google.com", "time.cloudflare.com"));
+            //*sntp_config = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+            *sntp_config = (esp_sntp_config_t) { 
+                .smooth_sync = 0, 
+                .server_from_dhcp = 0, 
+                .wait_for_sync = 1, 
+                .start = 1, 
+                //.sync_cb = ((void *)0), 
+                .sync_cb = wm_sntp_sync_cb, 
+                .renew_servers_after_new_IP = 0, 
+                .ip_event_to_renew = IP_EVENT_STA_GOT_IP, 
+                .index_of_first_server = 0, 
+                .num_of_servers = (1), 
+                .servers = {"pool.ntp.org"}
+                };
+            esp_netif_sntp_init(sntp_config);
+            free(sntp_config);
             return;
         }
 

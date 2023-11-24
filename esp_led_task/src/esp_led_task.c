@@ -1,45 +1,52 @@
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 #include "esp_led_task.h"
 #include "esp_log.h"
+#include <string.h>
 
 typedef struct lm_led {
     TaskHandle_t led_task_handle;
     ledc_mode_t speed_mode;
     ledc_channel_t channel;
+    SemaphoreHandle_t xSemaphore;
     TickType_t cycle_start;
     TickType_t cycle_interval;
+    uint8_t uIndex;
     lm_led_state_t *led_pgm;
 } lm_led_t;
 
 static lm_led_t *lm = NULL;
 
 static void vLedTask(void *pvParameters);
-static esp_err_t lm_update_state(TickType_t *cycle_start, TickType_t *cycle_interval, lm_led_state_t *leds)
+static esp_err_t lm_update_state(lm_led_state_t *leds);
+
+const char *tag ="ledtask";
 
 static void vLedTask(void *pvParameters) {
-    const char *tag ="ledtask";
-    ESP_LOGI(tag, "vLedTask running")
-    uint8_t uIndex = 0;
+    ESP_LOGI(tag, "vLedTask running");
     while(true)
     {
-        if(lm->led_pgm) {
-            if(lm->led_pgm[uIndex].intensity == -1 ) {
-                if((xTaskGetTickCount() - lm->cycle_start) > lm->cycle_interval) {
-                    uIndex = 0;
+        if(xSemaphoreTake(lm->xSemaphore, (TickType_t) 1) == pdTRUE) {
+            if(lm->led_pgm) {
+                if(lm->led_pgm[lm->uIndex].intensity == -1 ) {
+                    if((xTaskGetTickCount() - lm->cycle_start) > lm->cycle_interval) {
+                        lm->uIndex = 0;
+                    }
+                }
+                if(lm->uIndex == 0 ) {
+                    lm_update_state(&lm->led_pgm[lm->uIndex]);
+                    lm->uIndex++;
+                } else {
+                    if((xTaskGetTickCount() - lm->cycle_start) > lm->cycle_interval) {
+                        lm_update_state(&lm->led_pgm[lm->uIndex]);
+                        lm->uIndex++;
+                    }
                 }
             }
-            if(uIndex == 0 ) {
-                lm_update_state(&lm->led_pgm[uIndex]);
-                ESP_LOGI(tag, "Start with %lu at %lu [uIndex: %u]", lm->cycle_interval, lm->cycle_start, uIndex);
-                uIndex++;
-            } else {
-                if((xTaskGetTickCount() - lm->cycle_start) > lm->cycle_interval) {
-                    lm_update_state(&lm->led_pgm[uIndex]);
-                    ESP_LOGI(tag, "Switch with %lu at %lu [uIndex: %u]", lm->cycle_interval, lm->cycle_start, uIndex);
-                    uIndex++;
-                }
-            }
+            xSemaphoreGive(lm->xSemaphore);
+            vTaskDelay(1);
         }
-        vTaskDelay(1);
     }
 }
 
@@ -88,14 +95,31 @@ esp_err_t lm_init(lm_ledc_config_t *ledc_config) {
         ledc_timer_config(&defcfg->ledc_timer);
         ledc_channel_config(&defcfg->ledc_channel);
         free(defcfg);
+        lm->xSemaphore = xSemaphoreCreateBinary();
+        lm->uIndex = 0;
+        xSemaphoreGive(lm->xSemaphore);
         xTaskCreate(vLedTask, "ledctrl", 2048, NULL, 12, &lm->led_task_handle);
     }
     ledc_fade_func_install(0);
     return ESP_OK;
 }
 
-void lm_apply_pgm(lm_led_state_t *led_state, size_t led_pgm_size) {
-    if(led_state) {
-        
+void lm_apply_pgm(lm_led_state_t *led_state, size_t led_state_size) {
+    if(!lm) {
+        ESP_LOGE(tag,"not_init");
+        return;
     }
+    if(led_state) {
+        if(xSemaphoreTake(lm->xSemaphore, (TickType_t) 2) == pdTRUE) {
+            free(lm->led_pgm);
+            lm->led_pgm = (lm_led_state_t *)malloc(led_state_size);
+            lm->uIndex = 0;
+            memcpy(lm->led_pgm, led_state, led_state_size);
+            xSemaphoreGive(lm->xSemaphore);
+        } else {
+            ESP_LOGE(tag,"blocked");
+            return;
+        }
+    }
+    return;
 }

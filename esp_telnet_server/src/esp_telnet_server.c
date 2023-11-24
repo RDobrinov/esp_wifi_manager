@@ -263,9 +263,10 @@ static void vServerTask(void *pvParameters) {
                             tl_this->tlfds[TL_TSK_CLIENT_FD].events = POLLIN;
                             tl_this->tl_srv_state = TL_SRV_CLIENT_CONNECTED;
                             //ESP_LOGI("addr", "%08lX", cliAddr.sin_addr.s_addr);
-                            tl_event_post(TLSRV_EVENT_CLIENT_CONNECT, &cliAddr.sin_addr.s_addr, sizeof(uint32_t));
                             static const unsigned char SEND[] = { TELNET_IAC, TELNET_WILL, TELNET_TELOPT_ECHO };
                             send(tl_this->tlfds[TL_TSK_CLIENT_FD].fd, (char *)SEND, sizeof(SEND), 0);
+                            vTaskDelay(1);
+                            tl_event_post(TLSRV_EVENT_CLIENT_CONNECT, &cliAddr.sin_addr.s_addr, sizeof(uint32_t));
                             /* linenoise */
                             tl_this->tty.ls = (struct linenoiseState *)malloc(sizeof(struct linenoiseState));
                             tl_this->tty.line = (char *)malloc(sizeof(char) * LN_MAX_LINE_SIZE);
