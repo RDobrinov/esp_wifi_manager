@@ -95,11 +95,11 @@ esp_err_t lm_init(lm_ledc_config_t *ledc_config) {
         ledc_timer_config(&defcfg->ledc_timer);
         ledc_channel_config(&defcfg->ledc_channel);
         free(defcfg);
-        lm->xSemaphore = xSemaphoreCreateBinary();
-        lm->uIndex = 0;
-        xSemaphoreGive(lm->xSemaphore);
-        xTaskCreate(vLedTask, "ledctrl", 2048, NULL, 12, &lm->led_task_handle);
     }
+    lm->xSemaphore = xSemaphoreCreateBinary();
+    lm->uIndex = 0;
+    xSemaphoreGive(lm->xSemaphore);
+    xTaskCreate(vLedTask, "ledctrl", 2048, NULL, 12, &lm->led_task_handle);
     ledc_fade_func_install(0);
     return ESP_OK;
 }
