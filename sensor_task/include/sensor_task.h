@@ -3,7 +3,7 @@
 
 typedef struct reg_sensor_event {
     sensor_handle_t sensor_entry_h;
-    union sensor_conf_t _config;
+    sensor_conf_t _config;
 } reg_sensor_event_t;
 
 typedef enum {

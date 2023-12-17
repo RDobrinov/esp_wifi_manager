@@ -50,9 +50,25 @@ static void _event_handler(void* arg, esp_event_base_t event_base, int32_t event
             } else {
                 tsk_conf->tail_node->_next = (sns_ll_node_t *)malloc(sizeof(sns_ll_node_t));
                 tsk_conf->tail_node = tsk_conf->tail_node->_next;
-                tsk_conf->tail_node = NULL;
+                tsk_conf->tail_node->_next = NULL;
             }
+            //ESP_LOGW("t", "%p", (sensor_handle_t *)event_data);
+            tsk_conf->tail_node->_data._handler = (event_data) ? ((reg_sensor_event_t *)event_data)->sensor_entry_h : NULL;
             _event_post(SNSTSK_EVENT_SENSOR_REGISTRED, NULL, 0);
+            /* Test */
+            if(tsk_conf->tail_node->_data._handler) {
+                tsk_conf->tail_node->_data._handler(INIT, NULL);
+                ESP_LOGI("reg_sensor", "Type %u, bus %u, pins %u/%u", ((reg_sensor_event_t *)event_data)->_config.type, 
+                    ((reg_sensor_event_t *)event_data)->_config.i2c._port,
+                    ((reg_sensor_event_t *)event_data)->_config.i2c._sda,
+                    ((reg_sensor_event_t *)event_data)->_config.i2c._sdc);
+                //ESP_LOGW("t", "%p", tsk_conf->tail_node->_data._handler);
+            }
+            //sns_ll_node_t *work_node = tsk_conf->head_node;
+            //while(work_node) {
+            //    printf("Node %p, Next node %p\n", work_node, work_node->_next);
+            //    work_node=work_node->_next;
+            //}
         }
     }
 }

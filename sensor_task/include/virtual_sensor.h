@@ -1,3 +1,3 @@
 #include "base_def.h"
 
-void vsens(telnet_t *thisClient, telnet_event_t *event, void *client);
+void virtual_sensor(sensor_drv_tsk_t task, void *data);
