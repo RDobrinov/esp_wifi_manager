@@ -1,0 +1,8 @@
+menu "GPIO Driver"
+
+    config GPIO_TEXT_FUNCTIONS
+    bool "Compile with text functions"
+    default y
+    help
+        Add useful functions for decoding GPIO signal names. (+4kB)
+endmenu

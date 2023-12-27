@@ -2,18 +2,53 @@
 #include "esp_wifi_manager.h"
 #include "esp_log.h"
 
-#include <stdlib.h>
-
+#include "esp_led_task.h"
 #include "esp_telnet_server.h"
-
-#include <errno.h>
-#include <lwip/def.h>
-#include <lwip/sockets.h>
-
-#include <sys/poll.h>
-
+#include "sensor_task.h"
+#include "virtual_sensor.h"
 #include <driver/gpio.h>
-#include <driver/ledc.h>
+
+#include "gpio_driver.h"
+#include "driver/rtc_io.h"
+#include "driver/i2c_master.h"
+
+#include "esp_bit_defs.h"
+#include "esp_flash.h"
+#include "esp_chip_info.h"
+
+#include "hal/gpio_hal.h"
+#include "soc/rtc_io_channel.h"
+#include "soc/rtc_io_periph.h"
+#include "soc/soc.h"
+#include "driver/dac_oneshot.h"
+#include "esp_adc/adc_oneshot.h"
+//#include <driver/ledc.h>
+
+//void pointer(wm_wifi_base_config_t *ptr) {
+//    ptr = (wm_wifi_base_config_t *)realloc(ptr, 5);
+//}
+
+void conftest(void) {
+    ESP_LOGW("conftest", "%lX.%lX = %lx",rtc_io_desc[rtc_io_num_map[GPIO_NUM_26]].reg, rtc_io_desc[rtc_io_num_map[GPIO_NUM_26]].mux, READ_PERI_REG(rtc_io_desc[rtc_io_num_map[GPIO_NUM_26]].reg));
+}
+
+void dumpconf(void) {
+    for(int i = 0; i<18; i++) {
+        ESP_LOGI("dumpconf", "RTC[%d] %lX.%lX = %lx", i, rtc_io_desc[i].reg, rtc_io_desc[i].mux, READ_PERI_REG(rtc_io_desc[i].reg));
+    }
+}
+
+esp_event_loop_handle_t *p_uevent_loop;
+
+uint8_t cidr(uint32_t nm)
+{
+    nm = nm - ((nm >> 1) & ((u32_t)0x55555555UL));
+    nm = (nm & ((u32_t)0x33333333UL)) + ((nm >> 2) & ((u32_t)0x33333333UL));
+    nm = (nm + (nm >> 4)) & ((u32_t)0x0F0F0F0FUL);
+    nm = nm + (nm >> 8);
+    nm = nm + (nm >> 16);
+    return (uint8_t)( nm & ((u32_t)0x0000003FUL));
+}
 
 void main_pause() {
     for (int i = 5; i >= 0; i--) {
@@ -21,7 +56,6 @@ void main_pause() {
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
 }
-esp_event_loop_handle_t *p_uevent_loop;
 
 static void u_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
     if(WM_EVENT ==  event_base ){
@@ -29,13 +63,12 @@ static void u_event_handler(void* arg, esp_event_base_t event_base, int32_t even
             ESP_LOGW("main", "WM_EVENT_NETIF_GOT_IP");
             esp_netif_t *test_netif=esp_netif_get_default_netif();
             if(test_netif == NULL) {
-                //ESP_LOGE("probe:netif", "No active netif");
+                ESP_LOGE("probe:netif", "No active netif");
             } else {
-                //ESP_LOGE("probe:ifkey", "%s", esp_netif_get_ifkey(test_netif));
+                ESP_LOGE("probe:ifkey", "%s", esp_netif_get_ifkey(test_netif));
             }
-            //ESP_LOGE("event"," " IPSTR "/" IPSTR "/" IPSTR, IP2STR(&((esp_netif_ip_info_t *)event_data)->ip), IP2STR(&((esp_netif_ip_info_t *)event_data)->netmask), IP2STR(&((esp_netif_ip_info_t *)event_data)->gw));
-            //ESP_LOGE("event","IP: " IPSTR, IP2STR(&((esp_netif_ip_info_t *)event_data)->ip));
-            
+            ESP_LOGE("event"," " IPSTR "/" IPSTR "/" IPSTR, IP2STR(&((esp_netif_ip_info_t *)event_data)->ip), IP2STR(&((esp_netif_ip_info_t *)event_data)->netmask), IP2STR(&((esp_netif_ip_info_t *)event_data)->gw));
+
             QueueHandle_t cmd_h = tl_get_cmd_handle();
             tl_cmds_e cmd = TL_CMD_START;
             if(cmd_h) {
@@ -48,6 +81,7 @@ static void u_event_handler(void* arg, esp_event_base_t event_base, int32_t even
         }
         if(event_id == WM_EVENT_STA_CONNECT ) {
             ESP_LOGW("main", "WM_EVENT_STA_CONNECT");
+            //esp_event_post_to(*p_uevent_loop, SNSTSK_EVENT, SNSTSK_EVENT_REG_SENSOR, NULL, 0, 1);
         }
         if(event_id == WM_EVENT_STA_DISCONNECT ) {
             ESP_LOGW("main", "WM_EVENT_STA_DISCONNECT");
@@ -82,147 +116,216 @@ static void tl_event_handler(void* arg, esp_event_base_t event_base, int32_t eve
     }
 }
 
+static void sensor_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
+    switch(event_id) {
+        case SNSTSK_EVENT_TASK_CREATED:
+            ESP_LOGI("snsevt", "Sensor task started");
+            break;
+        case SNSTSK_EVENT_SENSOR_REGISTRED:
+            ESP_LOGI("snsevt", "Sensor registred");
+            break;
+        default:
+            break;
+    }    
+}
+
 void app_main(void)
 {
-    printf("xTaskGetTickCount %lu\n", xTaskGetTickCount());
-    printf("xTaskGetTickCount %u\n", xthal_get_ccount());
+    TickType_t a = xTaskGetTickCount();
+    ESP_LOGI("tick", "%lu", a);
     printf("test\n");
 
     p_uevent_loop = (esp_event_loop_handle_t *)malloc(sizeof(esp_event_loop_handle_t));
     esp_event_loop_args_t uevent_args = {
         .queue_size = 5,
         .task_name = "uevloop",
-        .task_priority = 19,
-        .task_stack_size = 4096,
+        .task_priority = 15,
+        .task_stack_size = 3072,
         .task_core_id = tskNO_AFFINITY
     };
     esp_err_t err;
     err = esp_event_loop_create(&uevent_args, p_uevent_loop);
-    err = esp_event_loop_create_default();
-    
-    //esp_event_handler_instance_register_with(*p_uevent_loop, WM_EVENT, ESP_EVENT_ANY_ID, u_event_handler, NULL, NULL);
-    //esp_event_handler_instance_register_with(*p_uevent_loop, TLSRV_EVENT, ESP_EVENT_ANY_ID, tl_event_handler, NULL, NULL);
+    lm_init(NULL);
+    lm_apply_pgm((lm_led_state_t[]) {{2048, 0, 150}, {256, 0, 150}, {2048, 0, 150}, {0, 750, 1500}, {-1, -1, -1}}, 5*sizeof(lm_led_state_t));
 
-    esp_event_handler_instance_register(WM_EVENT, ESP_EVENT_ANY_ID, u_event_handler, NULL, NULL);
-    esp_event_handler_instance_register(TLSRV_EVENT, ESP_EVENT_ANY_ID, tl_event_handler, NULL, NULL);
+    if(tl_server_init(p_uevent_loop) == ESP_OK) {
+        ESP_LOGE("main", "telnet ok");    
+    }
+    
+    esp_event_handler_register_with(*p_uevent_loop, WM_EVENT, ESP_EVENT_ANY_ID, u_event_handler, NULL);
+    esp_event_handler_instance_register_with(*p_uevent_loop, TLSRV_EVENT, ESP_EVENT_ANY_ID, tl_event_handler, NULL, NULL);
+    esp_event_handler_instance_register_with(*p_uevent_loop, SNSTSK_EVENT, SNSTSK_EVENT_TASK_CREATED, sensor_event_handler, NULL, NULL);
+    esp_event_handler_instance_register_with(*p_uevent_loop, SNSTSK_EVENT, SNSTSK_EVENT_SENSOR_REGISTRED, sensor_event_handler, NULL, NULL);
 
     wm_wifi_connection_data_t *test = (wm_wifi_connection_data_t *)calloc(1, sizeof(wm_wifi_connection_data_t));
-    if(tl_server_init(p_uevent_loop) != ESP_OK) { ESP_LOGE("main", "telnet nok");}
-    tl_server_init(NULL);
     wm_init_wifi_connection_data( test );
 
-    //tl_server_init(p_uevent_loop, WM_EVENT, WM_EVENT_NETIF_GOT_IP);
-
-    //strcpy((char *)test->known_networks[0].wifi_ssid, "Apt.16 Guest");
-    //strcpy((char *)test->known_networks[0].wifi_password, "1234567890");
-    //strcpy((char *)test->known_networks[1].wifi_ssid, "guess.the.pussybilities");
-    //strcpy((char *)test->known_networks[1].wifi_password, "1234567890");
     test->ap_mode = (wm_wifi_base_config_t){
         .wifi_ssid = "AP WifiMgr Test", .wifi_password = "",
-        .static_ip.ip =  { ((u32_t)0x010810ACUL) },
-        .static_ip.netmask = { ((u32_t)0xFCFFFFFFUL) },         
+        .static_ip.ip =  { ((u32_t)0x010810ACUL) }, 
         .static_ip.gw = { ((u32_t)0x010810ACUL) },
+        .static_ip.netmask = { ((u32_t)0xFCFFFFFFUL) },
+        //.pri_dns_server = { ((u32_t)0x08080808UL) }
         .pri_dns_server = { IPADDR_ANY }
     };
+    ESP_LOGI("cidr", "%u", cidr(test->ap_mode.static_ip.netmask.addr));
+    wm_init_wifi_manager(test, p_uevent_loop);
 
-    //wm_init_wifi_manager(test, p_uevent_loop);
-    wm_init_wifi_manager(test, NULL);
-    
     test->ap_mode = (wm_wifi_base_config_t){
-        .wifi_ssid = "guess.the.pussybilities", .wifi_password = "1234567890",
-        .static_ip.ip = { ((u32_t)0xFA0810ACUL) },
-        .static_ip.netmask = { ((u32_t)0x00FFFFFFUL) }, 
-        .static_ip.gw = { ((u32_t)0x010810ACUL) },
-        .pri_dns_server = { ((u32_t)0x08080808UL) } 
+        .wifi_ssid = "Mi Phone", .wifi_password = "",
+        .static_ip.ip = { ((u32_t)0x642BA8C0UL) }, 
+        .static_ip.gw = { ((u32_t)0x012BA8C0UL) },
+        .static_ip.netmask = { ((u32_t)0x00FFFFFFUL) },
+        .pri_dns_server = { ((u32_t)0x08080808UL) }
     };
-    //wm_change_ap_mode_config(&test->ap_mode);
-    //main_pause();
-    wm_add_known_network_config( &test->ap_mode );
-    wm_add_known_network("Mi Phone", "");
+    ESP_LOGI("cidr", "%u", cidr(test->ap_mode.static_ip.netmask.addr));
+    
+    //wm_add_known_network("Mi Phone", "");
+    wm_add_known_network_config(&test->ap_mode);
 
-    ESP_LOGI("tick", "%lu", xTaskGetTickCount());
-    printf("xTaskGetTickCount %lu\n", xTaskGetTickCount());
-    printf("xTaskGetTickCount %u\n", xthal_get_ccount());
-    main_pause();
-    printf("xTaskGetTickCount %lu\n", xTaskGetTickCount());
-    printf("xTaskGetTickCount %u\n", xthal_get_ccount());
-    ESP_LOGI("tick", "%lu", xTaskGetTickCount());
-    TickType_t a = 0xfffffffe;
-    TickType_t b = 0x00000002;
-    ESP_LOGI("tick","b - a = %lu", b - a);
-    //void wm_change_ap_mode_config( wifi_base_config_t *pWifiConn );
-    //wifi_base_config_t *baseconf = (wifi_base_config_t *)calloc(1, sizeof(wifi_base_config_t));
-    //strcpy(baseconf->wifi_ssid, "wm_change_ap_mode_config");
-    //ESP_LOGE("main", "%s", CONFIG_WIFIMGR_COUNTRY_CODE);
+    wm_add_known_network("Apt.16 Guest", "1234567890");
 
-    #define LEDC_TIMER              LEDC_TIMER_0
-    #define LEDC_MODE               LEDC_HIGH_SPEED_MODE
-    #define LEDC_OUTPUT_IO          (GPIO_NUM_19)
-    #define LEDC_CHANNEL            LEDC_CHANNEL_0
-    #define LEDC_DUTY_RES           LEDC_TIMER_13_BIT // Set duty resolution to 13 bits
-    #define LEDC_DUTY               (1024) // Set duty to 50%. ((2 ** 13) - 1) * 50% = 4095
-    #define LEDC_FREQUENCY          (5000) // Frequency in Hertz. Set frequency at 5 kHz
+    /*lm_ledc_config_t *ledconf = (lm_ledc_config_t *)calloc(1, sizeof(lm_ledc_config_t));
+    ledconf->ledc_timer = (ledc_timer_config_t){
+        .speed_mode = LEDC_HIGH_SPEED_MODE, 
+        .timer_num = LEDC_TIMER_0, 
+        .duty_resolution = LEDC_TIMER_12_BIT, 
+        .freq_hz = 16000, 
+        .clk_cfg = LEDC_AUTO_CLK
+    };
+    ledconf->ledc_channel = (ledc_channel_config_t){
+        .speed_mode     = LEDC_HIGH_SPEED_MODE,
+        .channel        = LEDC_CHANNEL_0,
+        .timer_sel      = LEDC_TIMER_0,
+        .intr_type      = LEDC_INTR_DISABLE,
+        .gpio_num       = GPIO_NUM_19,
+        .duty           = 0, // Set duty to 0%
+        .hpoint         = 0
+    };
+    lm_init(ledconf); */
 
-    //while(1) {
-        ledc_timer_config_t ledc_timer = {
-            .speed_mode       = LEDC_MODE,
-            .timer_num        = LEDC_TIMER,
-            .duty_resolution  = LEDC_DUTY_RES,
-            .freq_hz          = LEDC_FREQUENCY,  // Set output frequency at 5 kHz
-            .clk_cfg          = LEDC_AUTO_CLK
-        };
+    sns_task_init(p_uevent_loop);
+    reg_sensor_event_t tev;
+    tev.sensor_entry_h = virtual_sensor;
+    tev._config.type = I2C;
+    tev._config.i2c = (struct i2c_bus_config){1, GPIO_NUM_10, GPIO_NUM_11};
+    //ESP_LOGW("p", "%p - %p (%u)", virtual_sensor, tev.handle, sizeof(void(*)()));
+    esp_event_post_to(*p_uevent_loop, SNSTSK_EVENT, SNSTSK_EVENT_REG_SENSOR, &tev, sizeof(tev), 1);
+    //esp_event_post_to(*p_uevent_loop, SNSTSK_EVENT, SNSTSK_EVENT_REG_SENSOR, NULL, 0, 1);
+    lm_apply_pgm((lm_led_state_t[]) {{2048, 0, 150}, {0, 0, 150}, {-1, -1, -1}}, 3*sizeof(lm_led_state_t));
+    //vTaskDelay(500);
+    esp_event_post_to(*p_uevent_loop, SNSTSK_EVENT, SNSTSK_EVENT_REG_SENSOR, NULL, 0, 1);
+    lm_apply_pgm((lm_led_state_t[]) {{2048, 0, 150}, {256, 0, 150}, {2048, 0, 150}, {0, 750, 1500}, {-1, -1, -1}}, 5*sizeof(lm_led_state_t));
 
-        ledc_channel_config_t ledc_channel = {
-            .speed_mode     = LEDC_MODE,
-            .channel        = LEDC_CHANNEL,
-            .timer_sel      = LEDC_TIMER,
-            .intr_type      = LEDC_INTR_DISABLE,
-            .gpio_num       = LEDC_OUTPUT_IO,
-            .duty           = 0, // Set duty to 0%
-            .hpoint         = 0
-        };
+    uint32_t chip_id;
+    esp_flash_read_id(NULL, &chip_id);
+    ESP_LOGW("chip_id", "%lu", chip_id);
+    esp_flash_get_physical_size(NULL, &chip_id);
+    ESP_LOGW("flash_size", "%lu", chip_id);
 
-        ledc_timer_config(&ledc_timer);
-        ledc_channel_config(&ledc_channel);
+    esp_chip_info_t chip_info;
+    esp_chip_info(&chip_info);
+    ESP_LOGE("chipinfo", "%x %lx %x %x", chip_info.model, chip_info.features, chip_info.cores, chip_info.revision);
 
-        ledc_fade_func_install(0);
+    gpio_drv_init();
+    ESP_LOGI("reg", "%llx", gpio_drv_get_reservations());
+    gpio_drv_reserve_pins(BIT64(GPIO_NUM_16) | BIT64(GPIO_NUM_17) | BIT64(GPIO_NUM_19) | BIT64(GPIO_NUM_0));
+    ESP_LOGI("218", "%llx", gpio_drv_get_reservations());
+    i2c_master_bus_config_t i2c_mst_config = {
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .i2c_port = -1,
+        .scl_io_num = GPIO_NUM_16,
+        .sda_io_num = GPIO_NUM_17,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
+    };
 
-        //ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, LEDC_DUTY);
-        //ledc_update_duty(LEDC_MODE, LEDC_CHANNEL);
-        //vTaskDelay(1000 / portTICK_PERIOD_MS);
-        ledc_set_fade_time_and_start(LEDC_MODE, LEDC_CHANNEL, 1024, 1500, LEDC_FADE_NO_WAIT);
+    i2c_master_bus_handle_t bus_handle;
+    ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_mst_config, &bus_handle));
 
-        //ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, 0);
-        //ledc_update_duty(LEDC_MODE, LEDC_CHANNEL);
-        //vTaskDelay(250 / portTICK_PERIOD_MS);
+    gpio_config_t io_conf = {};
+    io_conf.intr_type = GPIO_INTR_DISABLE;
+    io_conf.mode = GPIO_MODE_OUTPUT_OD;
+    io_conf.pin_bit_mask = BIT64(GPIO_NUM_0);
+    io_conf.pull_down_en = 1;
+    io_conf.pull_up_en = 0;
+    //gpio_config(&io_conf);
+    conftest();
+    rtc_gpio_init(GPIO_NUM_26);
+    conftest();
+    rtc_gpio_pullup_en(GPIO_NUM_26);
+    conftest();
+    rtc_gpio_pullup_dis(GPIO_NUM_26);
+    rtc_gpio_pulldown_en(GPIO_NUM_26);
+    conftest();
 
+    dac_oneshot_handle_t chan1_handle;
+    dac_oneshot_config_t chan1_cfg = {
+        .chan_id = DAC_CHAN_1,
+    };
+    dac_oneshot_new_channel(&chan1_cfg, &chan1_handle);
+    dac_oneshot_output_voltage(chan1_handle, 128);
+    conftest();
+
+    adc_oneshot_unit_handle_t adc2_handle;
+    adc_oneshot_unit_init_cfg_t init_config2 = {
+        .unit_id = ADC_UNIT_2,
+        .ulp_mode = ADC_ULP_MODE_DISABLE,
+    };
+
+    adc_oneshot_chan_cfg_t config_chan = {
+        .bitwidth = ADC_BITWIDTH_DEFAULT,
+        .atten = ADC_ATTEN_DB_12,
+    };
+
+    int adc_raw;
+    int adc_io_num;
+    adc_oneshot_new_unit(&init_config2, &adc2_handle);
+    adc_oneshot_config_channel(adc2_handle, ADC_CHANNEL_9, &config_chan);
+    adc_oneshot_read(adc2_handle, ADC_CHANNEL_9, &adc_raw);
+    adc_oneshot_channel_to_io(ADC_UNIT_2, ADC_CHANNEL_9, &adc_io_num);
+    conftest();
+    ESP_LOGE("gpiodrv", "%d", adc_raw);
+    dumpconf();
+
+    gpio_dump_io_configuration(stdout, BIT64(GPIO_NUM_26));
+
+    char *testtext = gpio_drv_get_io_description(GPIO_NUM_0, false);
+    ESP_LOGE("gpiodrv", "%s", testtext);
+    free(testtext);
+    
+    uint32_t gpio_pin = GPIO_NUM_7;
+    gpio_pin_io_config_t *pin_io = (gpio_pin_io_config_t *)malloc(sizeof(gpio_pin_io_config_t));
+    pin_io->gpio_num = gpio_pin;
+    free(pin_io);
+
+    //for (int i = 0; i < SIG_GPIO_OUT_IDX; i++) {
+    //    ESP_LOGW("hal", "Signal %d -> %d", i, gpio_ll_get_in_signal_connected_io(&GPIO, i));
     //}
-    typedef enum {
-        LEDMGR_NO_FADE = 0,
-        LEDMGR_FAST_FADE = 500,
-        LEDMGR_SLOW_FADE = 1000
-    } lm_fade_speed_t;
 
-    typedef enum {
-        LEDMGR_SHORT = 250,
-        LEDMGR_LONG = 500,
-        LEDMGR_VLONG = 1000
-    } lm_interval_t;
-        
-    typedef struct lm_led_state {
-        short intensity;
-        lm_fade_speed_t fade_time;
-        lm_interval_t time;
-    } lm_led_state_t;
+    //wm_wifi_base_config_t *list = malloc(WIFIMGR_MAX_KNOWN_AP * sizeof(wm_wifi_base_config_t));
+    /*wm_get_known_networks(list);
 
-    lm_led_state_t led_pgm[] = {
-        {2048, LEDMGR_SLOW_FADE, LEDMGR_LONG},
-        {512, LEDMGR_SLOW_FADE, LEDMGR_LONG},
-        {0, LEDMGR_NO_FADE, LEDMGR_LONG},
-        {4095, LEDMGR_NO_FADE, LEDMGR_SHORT},
-        {0, LEDMGR_NO_FADE, LEDMGR_SHORT},
-        {4095, LEDMGR_NO_FADE, LEDMGR_VLONG},
-        {0, LEDMGR_NO_FADE, LEDMGR_SHORT},
-        {-1, -1, -1}
-    };
+    for( int i=0; i<WIFIMGR_MAX_KNOWN_AP; i++) {
+        ESP_LOGW("list", "%s,%s [IP:" IPSTR ", NM:" IPSTR " GW:" IPSTR " DNS IP:" IPSTR "]",list[i].wifi_ssid, list[i].wifi_password, IP2STR(&list[i].static_ip.ip), IP2STR(&list[i].static_ip.netmask), IP2STR(&list[i].static_ip.gw), IP2STR(&list[i].pri_dns_server));
+    }
+
+    //wm_delete_known_network("Apt.16 Guest");
+
+    wm_get_known_networks(list);
+    for( int i=0; i<WIFIMGR_MAX_KNOWN_AP; i++) {
+        ESP_LOGW("list", "%s,%s [IP:" IPSTR ", NM:" IPSTR " GW:" IPSTR " DNS IP:" IPSTR "]",list[i].wifi_ssid, list[i].wifi_password, IP2STR(&list[i].static_ip.ip), IP2STR(&list[i].static_ip.netmask), IP2STR(&list[i].static_ip.gw), IP2STR(&list[i].pri_dns_server));
+    }
+
+    wm_get_ap_config(list);
+    
+    ESP_LOGE("list", "%s,%s [IP:" IPSTR ", NM:" IPSTR " GW:" IPSTR " DNS IP:" IPSTR "]",list[0].wifi_ssid, list[0].wifi_password, IP2STR(&list[0].static_ip.ip), IP2STR(&list[0].static_ip.netmask), IP2STR(&list[0].static_ip.gw), IP2STR(&list[0].pri_dns_server));
+    */
+    //main_pause();
+    //pointer(my3);
+    //ESP_LOGW("main","%p",my3);
+    //strcpy((char *)&my3[j-1].wifi_password, "test test test");
+    //ESP_LOGE("main", "%s", (char *) &my3[j-1].wifi_password);
+    //ESP_LOGE("main", "%s", CONFIG_WIFIMGR_COUNTRY_CODE);
+    //ESP_LOGE("main", "%s", tskKERNEL_VERSION_NUMBER);
 }
