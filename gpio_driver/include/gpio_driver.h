@@ -4,15 +4,21 @@
 #ifndef _GPIO_DRIVER_H_
 #define _GPIO_DRIVER_H_
 
+#include "driver/rtc_io.h"
 #include "esp_bit_defs.h"
 #include "hal/gpio_hal.h"
+#include "soc/rtc_io_channel.h"
+#include "soc/rtc_io_periph.h"
+#include "soc/rtc_io_struct.h"
+#include "soc/soc.h"
 
 /**
- * @brief Type of GPIO IO MCU config (IO_MUX_x_REGx)
+ * @brief Type of GPIO IO MCU config (IO_MUX_x_REGx or RTCIO)
 */
 typedef struct gpio_pin_io_config {
     gpio_num_t gpio_num;        /*!< GPIO number */
     bool reserved;              /*!< GPIO driver reservation state      */
+    bool rtc_mux;               /*!< RTC MUX enabled or not             */
     bool pull_up;               /*!< Pull-up enabled or not             */
     bool pull_down;             /*!< Pull-down enabled or not           */
     bool input_enable;          /*!< Input enabled or not               */

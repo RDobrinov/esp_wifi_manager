@@ -97,8 +97,26 @@ uint64_t gpio_drv_get_reservations(void) {
 }
 
 void gpio_drv_get_pin_io_config(gpio_pin_io_config_t *pin_io_config) {
-    gpio_ll_get_io_config(_drv_config._hw, pin_io_config->gpio_num, &(pin_io_config->pull_up), &(pin_io_config->pull_down), &(pin_io_config->input_enable), &(pin_io_config->output_enable),
+    uint32_t reg_rtcio_value = 0;
+    pin_io_config->rtc_mux = false;
+    if(rtc_gpio_is_valid_gpio(pin_io_config->gpio_num))
+    {
+        reg_rtcio_value = READ_PERI_REG(rtc_io_desc[rtc_io_num_map[pin_io_config->gpio_num]].reg);
+        pin_io_config->rtc_mux = !!(reg_rtcio_value & rtc_io_desc[rtc_io_num_map[pin_io_config->gpio_num]].mux);
+        //!!(GET_PERI_REG_MASK(rtc_io_desc[rtc_io_num_map[tested_pin]].reg, rtc_io_desc[rtc_io_num_map[tested_pin]].mux));
+    }
+    if(pin_io_config->rtc_mux) {
+        pin_io_config->open_drain = !!((RTCIO.pin[rtc_io_num_map[pin_io_config->gpio_num]].val >> 2) & 1);
+        pin_io_config->input_enable = reg_rtcio_value & rtc_io_desc[rtc_io_num_map[pin_io_config->gpio_num]].ie;
+        pin_io_config->output_enable = (READ_PERI_REG(RTC_GPIO_ENABLE_REG) >> 14) & (1UL << rtc_io_num_map[pin_io_config->gpio_num]);
+        pin_io_config->pull_up = reg_rtcio_value & rtc_io_desc[rtc_io_num_map[pin_io_config->gpio_num]].pullup;
+        pin_io_config->pull_down = reg_rtcio_value & rtc_io_desc[rtc_io_num_map[pin_io_config->gpio_num]].pulldown;
+        pin_io_config->function_selected = (reg_rtcio_value >> rtc_io_desc[rtc_io_num_map[pin_io_config->gpio_num]].func) & 3UL;
+        pin_io_config->drive_current = (reg_rtcio_value >> rtc_io_desc[rtc_io_num_map[pin_io_config->gpio_num]].drv_s) & rtc_io_desc[rtc_io_num_map[pin_io_config->gpio_num]].drv_s;
+    } else {
+        gpio_ll_get_io_config(_drv_config._hw, pin_io_config->gpio_num, &(pin_io_config->pull_up), &(pin_io_config->pull_down), &(pin_io_config->input_enable), &(pin_io_config->output_enable),
                         &(pin_io_config->open_drain), &(pin_io_config->drive_current), &(pin_io_config->function_selected), &(pin_io_config->signal_out), &(pin_io_config->sleep_enable));
+    }
     pin_io_config->reserved = gpio_drv_is_pin_reserved(pin_io_config->gpio_num);
 }
 
@@ -132,19 +150,33 @@ char *gpio_drv_get_io_description(gpio_num_t gpio_num, bool short_desc) {
     gpio_drv_get_pin_io_config(pin_io);
     
     if(pin_io->reserved) {
-        sprintf(description, (short_desc)?"IO%02d RSVD %s%s%s%s:%s%s DC:%dmA %s %s%s%s%s%s%s":"IO%02d is reserved %s%s%s%s %s%s with Drive current %dmA via %s %s%s%s%s%s%s",
-            pin_io->gpio_num,
-            (pin_io->open_drain)?(short_desc)?"OD:":"Open drain ":"",
-            (pin_io->input_enable)?(short_desc)?"In":"Input":"",(pin_io->input_enable)&&(pin_io->output_enable)?"/":"",(pin_io->output_enable)?(short_desc)?"Out":"Output":"",
-            (pin_io->pull_up)?"PU":(pin_io->pull_down)?"PD":"HI", (pin_io->sleep_enable)?(short_desc)?"[SSEn]":" (SSEn)":"", 5*(1<<pin_io->drive_current),
-            (pin_io->function_selected == PIN_FUNC_GPIO) ? "GPIO Matrix" : "IOMUX",
-            (pin_io->function_selected == PIN_FUNC_GPIO)&&(pin_io->input_enable)?"SigIn:":"",
-            (pin_io->function_selected == PIN_FUNC_GPIO)&&(pin_io->input_enable)?gpio_drv_get_sig_name(gpio_drv_get_in_signal(pin_io->gpio_num), true):"",
-            (pin_io->function_selected == PIN_FUNC_GPIO)&&(pin_io->input_enable)&&(pin_io->output_enable)?(short_desc)?" ":" and ":"",
-            (pin_io->function_selected == PIN_FUNC_GPIO)&&(pin_io->output_enable)?"SigOut:":"",
-            (pin_io->function_selected == PIN_FUNC_GPIO)&&(pin_io->output_enable)?gpio_drv_get_sig_name(pin_io->signal_out, false):"",
-            (pin_io->function_selected != PIN_FUNC_GPIO)?gpio_drv_get_iomux_func_name(pin_io->function_selected ,pin_io->gpio_num):""
-        );
+        if(pin_io->rtc_mux) {
+            sprintf(description, (short_desc)?"IO%02d RSVD %s%s%s%s%s%s%s%s%s DC:%dmA RTC IOMUX":"IO%02d is reserved %s%s%s%s%s%s%s%s%s with Drive current %dmA via RTC IOMUX",
+                pin_io->gpio_num,
+                (pin_io->open_drain)?(short_desc)?"OD:":"Open drain ":"",
+                (pin_io->input_enable)?(short_desc)?"In":"Input":"",(pin_io->input_enable)&&(pin_io->output_enable)?"/":"",(pin_io->output_enable)?(short_desc)?"Out":"Output":"",
+                (pin_io->input_enable)||(pin_io->output_enable)?(short_desc)?":":" ":"",
+                (pin_io->pull_up)?(short_desc)?"PU":"PullUp":"",(pin_io->pull_up)&&(pin_io->pull_down)?"/":"",(pin_io->pull_down)?(short_desc)?"PD":"PullDown":"",
+                (!pin_io->pull_up)&&(!pin_io->pull_down)?(short_desc)?"HI":"HighImpedance":"", 5*(1<<pin_io->drive_current)
+            );
+        } else { 
+            sprintf(description, (short_desc)?"IO%02d RSVD %s%s%s%s%s%s%s%s%s%s DC:%dmA %s %s%s%s%s%s%s":"IO%02d is reserved %s%s%s%s%s%s%s%s%s%s with Drive current %dmA via %s %s%s%s%s%s%s",
+                pin_io->gpio_num,
+                (pin_io->open_drain)?(short_desc)?"OD:":"Open drain ":"",
+                (pin_io->input_enable)?(short_desc)?"In":"Input":"",(pin_io->input_enable)&&(pin_io->output_enable)?"/":"",(pin_io->output_enable)?(short_desc)?"Out":"Output":"",
+                (pin_io->input_enable)||(pin_io->output_enable)?(short_desc)?":":" ":"",
+                (pin_io->pull_up)?(short_desc)?"PU":"PullUp":"",(pin_io->pull_up)&&(pin_io->pull_down)?"/":"",(pin_io->pull_down)?(short_desc)?"PD":"PullDown":"",
+                (!pin_io->pull_up)&&(!pin_io->pull_down)?(short_desc)?"HI":"HighImpedance":"", 
+                (pin_io->sleep_enable)?(short_desc)?"[SSEn]":" (SSEn)":"", 5*(1<<pin_io->drive_current),
+                (pin_io->function_selected == PIN_FUNC_GPIO) ? "GPIO Matrix" : "IOMUX",
+                (pin_io->function_selected == PIN_FUNC_GPIO)&&(pin_io->input_enable)?"SigIn:":"",
+                (pin_io->function_selected == PIN_FUNC_GPIO)&&(pin_io->input_enable)?gpio_drv_get_sig_name(gpio_drv_get_in_signal(pin_io->gpio_num), true):"",
+                (pin_io->function_selected == PIN_FUNC_GPIO)&&(pin_io->input_enable)&&(pin_io->output_enable)?(short_desc)?" ":" and ":"",
+                (pin_io->function_selected == PIN_FUNC_GPIO)&&(pin_io->output_enable)?"SigOut:":"",
+                (pin_io->function_selected == PIN_FUNC_GPIO)&&(pin_io->output_enable)?gpio_drv_get_sig_name(pin_io->signal_out, false):"",
+                (pin_io->function_selected != PIN_FUNC_GPIO)?gpio_drv_get_iomux_func_name(pin_io->function_selected ,pin_io->gpio_num):""
+            );
+        }
     } else sprintf(description, "IO%02d is free", pin_io->gpio_num);
     
     free(pin_io);

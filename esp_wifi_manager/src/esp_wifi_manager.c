@@ -599,6 +599,7 @@ esp_err_t wm_init_wifi_manager( wm_wifi_connection_data_t *pInitConfig, esp_even
 }
 
 esp_err_t wm_add_known_network_config( wm_wifi_base_config_t *known_network) {
+    if(!wm_config) return ESP_FAIL;
     int i=0;
     for(i=0; i<WIFIMGR_MAX_KNOWN_AP; i++) {
         if(strlen(wm_config->radio.known_networks[i].wifi_ssid) == 0 ) { break; }
@@ -609,6 +610,7 @@ esp_err_t wm_add_known_network_config( wm_wifi_base_config_t *known_network) {
 }
 
 esp_err_t wm_add_known_network( char *ssid, char *pwd) {
+    if(!wm_config) return ESP_FAIL;
     wm_wifi_base_config_t *new_network = calloc(1, sizeof(wm_wifi_base_config_t));
     wm_init_base_config(new_network);
     if(strlen(ssid)>31) {memcpy( new_network->wifi_ssid, ssid, 31);
