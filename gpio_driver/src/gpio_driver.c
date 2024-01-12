@@ -18,6 +18,8 @@ static const char *cc_gpio_matrix_sig[][SIG_GPIO_OUT_IDX] = {
     {"ext_adc_start", "", "", "", "", "", "U0RXD", "U0CTS", "U0DSR", "U1RXD", "U1CTS", "U1DSR", "I2S_MCLK", "I2SO_BCK", "I2SO_WS", "I2SI_SD", "I2SI_BCK", "I2SI_WS", "", "usb_jtag_tdo_bridge", "", "", "", "", "", "", "", "", "cpu_gpio0", "cpu_gpio1", "cpu_gpio2", "cpu_gpio3", "cpu_gpio4", "cpu_gpio5", "cpu_gpio6", "cpu_gpio7", "", "", "", "", "", "", "", "", "", "I2CEXT0_SCL", "I2CEXT0_SDA", "parl_rx_data0", "parl_rx_data1", "parl_rx_data2", "parl_rx_data3", "parl_rx_data4", "parl_rx_data5", "parl_rx_data6", "parl_rx_data7", "parl_rx_data8", "parl_rx_data9", "parl_rx_data10", "parl_rx_data11", "parl_rx_data12", "parl_rx_data13", "parl_rx_data14", "parl_rx_data15", "FSPICLK", "FSPIQ", "FSPID", "FSPIHD", "FSPIWP", "FSPICS0", "parl_rx_clk", "parl_tx_clk", "rmt_sig0", "rmt_sig1", "twai0_rx", "", "", "", "twai1_rx", "", "", "", "", "", "", "", "", "", "pwm0_sync0", "pwm0_sync1", "pwm0_sync2", "pwm0_f0", "pwm0_f1", "pwm0_f2", "pwm0_cap0", "pwm0_cap1", "pwm0_cap2", "", "sig_func_97", "sig_func_98", "sig_func_99", "sig_func_100", "pcnt_sig_ch00", "pcnt_sig_ch10", "pcnt_ctrl_ch00", "pcnt_ctrl_ch10", "pcnt_sig_ch01", "pcnt_sig_ch11", "pcnt_ctrl_ch01", "pcnt_ctrl_ch11", "pcnt_sig_ch02", "pcnt_sig_ch12", "pcnt_ctrl_ch02", "pcnt_ctrl_ch12", "pcnt_sig_ch03", "pcnt_sig_ch13", "pcnt_ctrl_ch03", "pcnt_ctrl_ch13", "", "", "", "", "SPIQ", "SPID", "SPIHD", "SPIWP", "", "", ""},
     {"ledc_ls_sig0", "ledc_ls_sig1", "ledc_ls_sig2", "ledc_ls_sig3", "ledc_ls_sig4", "ledc_ls_sig5", "U0TXD", "U0RTS", "U0DTR", "U1TXD", "U1RTS", "U1DTR", "I2S_MCLK", "I2SO_BCK", "I2SO_WS", "I2SO_SD", "I2SI_BCK", "I2SI_WS", "I2SO_SD1", "usb_jtag_trst", "", "", "", "", "", "", "", "", "cpu_gpio0", "cpu_gpio1", "cpu_gpio2", "cpu_gpio3", "cpu_gpio4", "cpu_gpio5", "cpu_gpio6", "cpu_gpio7", "", "", "", "", "", "", "", "", "", "I2CEXT0_SCL", "I2CEXT0_SDA", "parl_tx_data0", "parl_tx_data1", "parl_tx_data2", "parl_tx_data3", "parl_tx_data4", "parl_tx_data5", "parl_tx_data6", "parl_tx_data7", "parl_tx_data8", "parl_tx_data9", "parl_tx_data10", "parl_tx_data11", "parl_tx_data12", "parl_tx_data13", "parl_tx_data14", "parl_tx_data15", "FSPICLK_mux", "FSPIQ", "FSPID", "FSPIHD", "FSPIWP", "FSPICS0", "sdio_tohostt", "parl_tx_clk", "rmt_sig0", "rmt_sig1", "twai0_tx", "twai0_bus_off_on", "twai0_clkout", "twai0_standby", "twai1_tx", "twai1_bus_off_on", "twai1_clkout", "twai1_standby", "", "", "gpio_sd0", "gpio_sd1", "gpio_sd2", "gpio_sd3", "pwm00a", "pwm00b", "pwm01a", "pwm01b", "pwm02a", "pwm02b", "", "", "", "", "sig_func97", "sig_func98", "sig_func99", "sig_func100", "FSPICS1", "FSPICS2", "FSPICS3", "FSPICS4", "FSPICS5", "", "", "", "", "", "", "", "", "SPICLK_mux", "SPICS0", "SPICS1", "", "", "", "", "SPIQ", "SPID", "SPIHD", "SPIWP", "CLK1", "CLK2", "CLK3"}
 };
+
+static const char *cc_iomux_name = "LP";
 #endif /* CONFIG_IDF_TARGET_ESP32C6 */
 
 #ifdef CONFIG_IDF_TARGET_ESP32
@@ -34,14 +36,19 @@ static const char *cc_gpio_matrix_sig[][SIG_GPIO_OUT_IDX] = {
     {"SPICLK","SPIQ","SPID","SPIHD","SPIWP","SPICS0","SPICS1","SPICS2","HSPICLK","HSPIQ","HSPID","HSPICS0","HSPIHD","HSPIWP","U0RXD","U0CTS","U0DSR","U1RXD","U1CTS","","","","","I2S0O_BCK","I2S1O_BCK","I2S0O_WS","I2S1O_WS","I2S0I_BCK","I2S0I_WS","I2CEXT0_SCL","I2CEXT0_SDA","pwm0_sync0","pwm0_sync1","pwm0_sync2","pwm0_f0","pwm0_f1","pwm0_f2","","","pcnt_sig_ch00","pcnt_sig_ch10","pcnt_ctrl_ch00","pcnt_ctrl_ch10","pcnt_sig_ch01","pcnt_sig_ch11","pcnt_ctrl_ch01","pcnt_ctrl_ch11","pcnt_sig_ch02","pcnt_sig_ch12","pcnt_ctrl_ch02","pcnt_ctrl_ch12","pcnt_sig_ch03","pcnt_sig_ch13","pcnt_ctrl_ch03","pcnt_ctrl_ch13","pcnt_sig_ch04","pcnt_sig_ch14","pcnt_ctrl_ch04","pcnt_ctrl_ch14","","","HSPICS1","HSPICS2","VSPICLK","VSPIQ","VSPID","VSPIHD","VSPIWP","VSPICS0","VSPICS1","VSPICS2","pcnt_sig_ch05","pcnt_sig_ch15","pcnt_ctrl_ch05","pcnt_ctrl_ch15","pcnt_sig_ch06","pcnt_sig_ch16","pcnt_ctrl_ch06","pcnt_ctrl_ch16","pcnt_sig_ch07","pcnt_sig_ch17","pcnt_ctrl_ch07","pcnt_ctrl_ch17","rmt_sig0","rmt_sig1","rmt_sig2","rmt_sig3","rmt_sig4","rmt_sig5","rmt_sig6","rmt_sig7","","","","twai_rx","I2CEXT1_SCL","I2CEXT1_SDA","host_card_detect_n_1","host_card_detect_n_2","host_card_write_prt_1","host_card_write_prt_2","host_cardt_n_1","host_cardt_n_2","pwm1_sync0","pwm1_sync1","pwm1_sync2","pwm1_f0","pwm1_f1","pwm1_f2","pwm0_cap0","pwm0_cap1","pwm0_cap2","pwm1_cap0","pwm1_cap1","pwm1_cap2","","","","","","","","","","","","","","","","","","","","","","","","","","I2S0I_DATA0","I2S0I_DATA1","I2S0I_DATA2","I2S0I_DATA3","I2S0I_DATA4","I2S0I_DATA5","I2S0I_DATA6","I2S0I_DATA7","I2S0I_DATA8","I2S0I_DATA9","I2S0I_DATA10","I2S0I_DATA11","I2S0I_DATA12","I2S0I_DATA13","I2S0I_DATA14","I2S0I_DATA15","","","","","","","","","I2S1I_BCK","I2S1I_WS","I2S1I_DATA0","I2S1I_DATA1","I2S1I_DATA2","I2S1I_DATA3","I2S1I_DATA4","I2S1I_DATA5","I2S1I_DATA6","I2S1I_DATA7","I2S1I_DATA8","I2S1I_DATA9","I2S1I_DATA10","I2S1I_DATA11","I2S1I_DATA12","I2S1I_DATA13","I2S1I_DATA14","I2S1I_DATA15","","","","","","","","","I2S0I_H_SYNC","I2S0I_V_SYNC","I2S0I_H_ENABLE","I2S1I_H_SYNC","I2S1I_V_SYNC","I2S1I_H_ENABLE","","","U2RXD","U2CTS","emac_mdc_i","emac_mdi_i","emac_crs_i","emac_col_i","pcmfsync","pcmclk","pcmdin","","","","","","","","","","","","","","","","","","","","","",""},
     {"SPICLK","SPIQ","SPID","SPIHD","SPIWP","SPICS0","SPICS1","SPICS2","HSPICLK","HSPIQ","HSPID","HSPICS0","HSPIHD","HSPIWP","U0TXD","U0RTS","U0DTR","U1TXD","U1RTS","","","","","I2S0O_BCK","I2S1O_BCK","I2S0O_WS","I2S1O_WS","I2S0I_BCK","I2S0I_WS","I2CEXT0_SCL","I2CEXT0_SDA","sdio_tohost_int","pwm00a","pwm00b","pwm01a","pwm01b","pwm02a","pwm02b","","","","","","","","","","","","","","","","","","","","","","","","HSPICS1","HSPICS2","VSPICLK_mux","VSPIQ","VSPID","VSPIHD","VSPIWP","VSPICS0","VSPICS1","VSPICS2","ledc_hs_sig0","ledc_hs_sig1","ledc_hs_sig2","ledc_hs_sig3","ledc_hs_sig4","ledc_hs_sig5","ledc_hs_sig6","ledc_hs_sig7","ledc_ls_sig0","ledc_ls_sig1","ledc_ls_sig2","ledc_ls_sig3","ledc_ls_sig4","ledc_ls_sig5","ledc_ls_sig6","ledc_ls_sig7","rmt_sig0","rmt_sig1","rmt_sig2","rmt_sig3","rmt_sig4","rmt_sig5","rmt_sig6","rmt_sig7","I2CEXT1_SCL","I2CEXT1_SDA","host_ccmd_od_pullup_en_n","host_rst_n_1","host_rst_n_2","gpio_sd0","gpio_sd1","gpio_sd2","gpio_sd3","gpio_sd4","gpio_sd5","gpio_sd6","gpio_sd7","pwm10a","pwm10b","pwm11a","pwm11b","pwm12a","pwm12b","","","","","","","","","","twai_tx","twai_bus_off_on","twai_clkout","","","","","","","","","","","","","","","I2S0O_DATA0","I2S0O_DATA1","I2S0O_DATA2","I2S0O_DATA3","I2S0O_DATA4","I2S0O_DATA5","I2S0O_DATA6","I2S0O_DATA7","I2S0O_DATA8","I2S0O_DATA9","I2S0O_DATA10","I2S0O_DATA11","I2S0O_DATA12","I2S0O_DATA13","I2S0O_DATA14","I2S0O_DATA15","I2S0O_DATA16","I2S0O_DATA17","I2S0O_DATA18","I2S0O_DATA19","I2S0O_DATA20","I2S0O_DATA21","I2S0O_DATA22","I2S0O_DATA23","I2S1I_BCK","I2S1I_WS","I2S1O_DATA0","I2S1O_DATA1","I2S1O_DATA2","I2S1O_DATA3","I2S1O_DATA4","I2S1O_DATA5","I2S1O_DATA6","I2S1O_DATA7","I2S1O_DATA8","I2S1O_DATA9","I2S1O_DATA10","I2S1O_DATA11","I2S1O_DATA12","I2S1O_DATA13","I2S1O_DATA14","I2S1O_DATA15","I2S1O_DATA16","I2S1O_DATA17","I2S1O_DATA18","I2S1O_DATA19","I2S1O_DATA20","I2S1O_DATA21","I2S1O_DATA22","I2S1O_DATA23","","","","","","","","","U2TXD","U2RTS","emac_mdc_o","emac_mdo_o","emac_crs_o","emac_col_o","bt_audio0_irq","bt_audio1_irq","bt_audio2_irq","ble_audio0_irq","ble_audio1_irq","ble_audio2_irq","pcmfsync","pcmclk","pcmdout","ble_audio_sync0_p","ble_audio_sync1_p","ble_audio_sync2_p","","","","","","","","","sig_func224","sig_func225","sig_func226","sig_func227","sig_func228"}    
 };
+static const char *cc_iomux_name = "RTC";
 #endif /* CONFIG_IDF_TARGET_ESP32 */
 
 #endif /* CONFIG_GPIO_TEXT_FUNCTIONS */
+
+/**
+ * @brief Type of GPIO reservation status
+*/
 typedef struct gpio_drv_config {
-    bool _init_completed;
-    uint64_t _reserve_status;
-    uint64_t _system_reserved;
-    gpio_dev_t *_hw;
+    bool _init_completed;       /*!< Initialization complete                */
+    uint64_t _reserve_status;   /*!< GPIO driver reservation state          */
+    uint64_t _system_reserved;  /*!< GPIO driver system reservation state   */
+    gpio_dev_t *_hw;            /*!< HAL device driver                      */
 } gpio_drv_config_t;
 
 static gpio_drv_config_t _drv_config = (gpio_drv_config_t){false, 0LLU, 0LLU, &GPIO };
@@ -99,13 +106,19 @@ uint64_t gpio_drv_get_reservations(void) {
 void gpio_drv_get_pin_io_config(gpio_pin_io_config_t *pin_io_config) {
     uint32_t reg_rtcio_value = 0;
     pin_io_config->rtc_mux = false;
-    if(rtc_gpio_is_valid_gpio(pin_io_config->gpio_num))
-    {
+    if(rtc_gpio_is_valid_gpio(pin_io_config->gpio_num)) {
+        #ifdef CONFIG_IDF_TARGET_ESP32
         reg_rtcio_value = READ_PERI_REG(rtc_io_desc[rtc_io_num_map[pin_io_config->gpio_num]].reg);
         pin_io_config->rtc_mux = !!(reg_rtcio_value & rtc_io_desc[rtc_io_num_map[pin_io_config->gpio_num]].mux);
         //!!(GET_PERI_REG_MASK(rtc_io_desc[rtc_io_num_map[tested_pin]].reg, rtc_io_desc[rtc_io_num_map[tested_pin]].mux));
+        #endif /* CONFIG_IDF_TARGET_ESP32 */
+        #ifdef CONFIG_IDF_TARGET_ESP32C6
+        reg_rtcio_value = (1UL << rtc_io_num_map[pin_io_config->gpio_num]);
+        pin_io_config->rtc_mux = !!(HAL_FORCE_READ_U32_REG_FIELD(LP_AON.gpio_mux, gpio_mux_sel) & reg_rtcio_value);
+        #endif /* CONFIG_IDF_TARGET_ESP32C6 */
     }
     if(pin_io_config->rtc_mux) {
+        #ifdef CONFIG_IDF_TARGET_ESP32
         pin_io_config->open_drain = !!((RTCIO.pin[rtc_io_num_map[pin_io_config->gpio_num]].val >> 2) & 1);
         pin_io_config->input_enable = reg_rtcio_value & rtc_io_desc[rtc_io_num_map[pin_io_config->gpio_num]].ie;
         pin_io_config->output_enable = (READ_PERI_REG(RTC_GPIO_ENABLE_REG) >> 14) & (1UL << rtc_io_num_map[pin_io_config->gpio_num]);
@@ -113,6 +126,16 @@ void gpio_drv_get_pin_io_config(gpio_pin_io_config_t *pin_io_config) {
         pin_io_config->pull_down = reg_rtcio_value & rtc_io_desc[rtc_io_num_map[pin_io_config->gpio_num]].pulldown;
         pin_io_config->function_selected = (reg_rtcio_value >> rtc_io_desc[rtc_io_num_map[pin_io_config->gpio_num]].func) & 3UL;
         pin_io_config->drive_current = (reg_rtcio_value >> rtc_io_desc[rtc_io_num_map[pin_io_config->gpio_num]].drv_s) & rtc_io_desc[rtc_io_num_map[pin_io_config->gpio_num]].drv_s;
+        #endif /* CONFIG_IDF_TARGET_ESP32 */
+        #ifdef CONFIG_IDF_TARGET_ESP32C6
+        pin_io_config->open_drain = !!((uint32_t)LP_IO.pin[rtc_io_num_map[pin_io_config->gpio_num]].pad_driver);
+        pin_io_config->input_enable = !!((uint32_t)LP_IO.gpio[rtc_io_num_map[pin_io_config->gpio_num]].fun_ie);
+        pin_io_config->output_enable = !!(HAL_FORCE_READ_U32_REG_FIELD(LP_IO.out_enable, enable) & reg_rtcio_value);
+        pin_io_config->pull_up = !!((uint32_t)LP_IO.gpio[rtc_io_num_map[pin_io_config->gpio_num]].fun_wpu);
+        pin_io_config->pull_down = !!((uint32_t)LP_IO.gpio[rtc_io_num_map[pin_io_config->gpio_num]].fun_wpd);
+        pin_io_config->function_selected = (uint32_t)LP_IO.gpio[rtc_io_num_map[pin_io_config->gpio_num]].mcu_sel;
+        pin_io_config->drive_current = (uint32_t)LP_IO.gpio[rtc_io_num_map[pin_io_config->gpio_num]].fun_drv;
+        #endif /* CONFIG_IDF_TARGET_ESP32C6 */
     } else {
         gpio_ll_get_io_config(_drv_config._hw, pin_io_config->gpio_num, &(pin_io_config->pull_up), &(pin_io_config->pull_down), &(pin_io_config->input_enable), &(pin_io_config->output_enable),
                         &(pin_io_config->open_drain), &(pin_io_config->drive_current), &(pin_io_config->function_selected), &(pin_io_config->signal_out), &(pin_io_config->sleep_enable));
@@ -151,13 +174,13 @@ char *gpio_drv_get_io_description(gpio_num_t gpio_num, bool short_desc) {
     
     if(pin_io->reserved) {
         if(pin_io->rtc_mux) {
-            sprintf(description, (short_desc)?"IO%02d RSVD %s%s%s%s%s%s%s%s%s DC:%dmA RTC IOMUX":"IO%02d is reserved %s%s%s%s%s%s%s%s%s with Drive current %dmA via RTC IOMUX",
+            sprintf(description, (short_desc)?"IO%02d RSVD %s%s%s%s%s%s%s%s%s DC:%dmA %s":"IO%02d is reserved %s%s%s%s%s%s%s%s%s with Drive current %dmA via %s IOMUX",
                 pin_io->gpio_num,
                 (pin_io->open_drain)?(short_desc)?"OD:":"Open drain ":"",
                 (pin_io->input_enable)?(short_desc)?"In":"Input":"",(pin_io->input_enable)&&(pin_io->output_enable)?"/":"",(pin_io->output_enable)?(short_desc)?"Out":"Output":"",
                 (pin_io->input_enable)||(pin_io->output_enable)?(short_desc)?":":" ":"",
                 (pin_io->pull_up)?(short_desc)?"PU":"PullUp":"",(pin_io->pull_up)&&(pin_io->pull_down)?"/":"",(pin_io->pull_down)?(short_desc)?"PD":"PullDown":"",
-                (!pin_io->pull_up)&&(!pin_io->pull_down)?(short_desc)?"HI":"HighImpedance":"", 5*(1<<pin_io->drive_current)
+                (!pin_io->pull_up)&&(!pin_io->pull_down)?(short_desc)?"HI":"HighImpedance":"", 5*(1<<pin_io->drive_current), cc_iomux_name
             );
         } else { 
             sprintf(description, (short_desc)?"IO%02d RSVD %s%s%s%s%s%s%s%s%s%s DC:%dmA %s %s%s%s%s%s%s":"IO%02d is reserved %s%s%s%s%s%s%s%s%s%s with Drive current %dmA via %s %s%s%s%s%s%s",

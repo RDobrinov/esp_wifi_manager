@@ -1,0 +1,96 @@
+menu "Button Driver"
+
+    choice BTNDRV_LONG_CLICK_HOLD_TIME
+        prompt "Hold time for long click"
+        default BTNDRV_LONG_CLICK_HOLD_TIME_1S5
+        help 
+            "Minimum button hold time for long click event in seconds"
+        config BTNDRV_LONG_CLICK_HOLD_TIME_1S
+            bool "1 Second"
+        config BTNDRV_LONG_CLICK_HOLD_TIME_1S5
+            bool "1.5 Seconds"
+        config BTNDRV_LONG_CLICK_HOLD_TIME_2S
+            bool "2 Seconds"
+    endchoice
+
+    config BTNDRV_LONG_CLICK_HOLD_TIME
+        int
+        default "100" if BTNDRV_LONG_CLICK_HOLD_TIME_1S
+        default "150" if BTNDRV_LONG_CLICK_HOLD_TIME_1S5
+        default "200" if BTNDRV_LONG_CLICK_HOLD_TIME_2S
+
+
+    choice BTNDRV_LLONG_CLICK_HOLD_TIME
+        prompt "Hold time for long long click"
+        default BTNDRV_LLONG_CLICK_HOLD_TIME_3S5
+        help 
+            "Minimum button hold time for long long click event in seconds"
+        config BTNDRV_LLONG_CLICK_HOLD_TIME_3S
+            bool "3 Seconds"
+        config BTNDRV_LLONG_CLICK_HOLD_TIME_3S5
+            bool "3.5 Seconds"
+        config BTNDRV_LLONG_CLICK_HOLD_TIME_4S
+            bool "4 Seconds"
+    endchoice
+
+    config BTNDRV_LLONG_CLICK_HOLD_TIME
+        int
+        default "300" if BTNDRV_LLONG_CLICK_HOLD_TIME_3S
+        default "350" if BTNDRV_LLONG_CLICK_HOLD_TIME_3S5
+        default "400" if BTNDRV_LLONG_CLICK_HOLD_TIME_4S
+
+
+    choice BTNDRV_BUTTON_HOLD_HOLD_TIME
+        prompt "Hold time for HOLD"
+        default BTNDRV_BUTTON_HOLD_HOLD_TIME_7
+        help 
+            "Button hold time for before generate a HOLD event (seconds)"
+        config BTNDRV_BUTTON_HOLD_HOLD_TIME_5
+            bool "5 Seconds"
+        config BTNDRV_BUTTON_HOLD_HOLD_TIME_6
+            bool "6 Seconds"
+        config BTNDRV_BUTTON_HOLD_HOLD_TIME_7
+            bool "7 Seconds"
+        config BTNDRV_BUTTON_HOLD_HOLD_TIME_8
+            bool "8 Seconds"
+        config BTNDRV_BUTTON_HOLD_HOLD_TIME_9
+            bool "9 Seconds"
+        config BTNDRV_BUTTON_HOLD_HOLD_TIME_10
+            bool "10 Seconds"
+    endchoice
+
+    config BTNDRV_BUTTON_HOLD_HOLD_TIME
+        int
+        default "500" if BTNDRV_BUTTON_HOLD_HOLD_TIME_5
+        default "600" if BTNDRV_BUTTON_HOLD_HOLD_TIME_6
+        default "700" if BTNDRV_BUTTON_HOLD_HOLD_TIME_7
+        default "800" if BTNDRV_BUTTON_HOLD_HOLD_TIME_8
+        default "900" if BTNDRV_BUTTON_HOLD_HOLD_TIME_9
+        default "1000" if BTNDRV_BUTTON_HOLD_HOLD_TIME_10
+        
+
+    choice BTNDRV_EVENT_SEND_TIMEOUT
+        prompt "Guard timeout before send an event"
+        default BTNDRV_EVENT_SEND_TIMEOUT_2S5
+        help 
+            "Timeout before events are send in milliseconds"
+        config BTNDRV_EVENT_SEND_TIMEOUT_2
+            bool "200 mS"
+        config BTNDRV_EVENT_SEND_TIMEOUT_2S5
+            bool "250 mS"
+        config BTNDRV_EVENT_SEND_TIMEOUT_3
+            bool "300 mS"
+    endchoice
+
+    config BTNDRV_EVENT_SEND_TIMEOUT
+        int
+        default "20" if BTNDRV_EVENT_SEND_TIMEOUT_2
+        default "25" if BTNDRV_EVENT_SEND_TIMEOUT_2S5
+        default "30" if BTNDRV_EVENT_SEND_TIMEOUT_3
+
+    config BTNDRV_EVENT_SEND_EXTENDED_INFO
+        bool "Send PRESS/RELEASE events"
+        default y
+        help
+            Driver will send events when button pressed or released
+endmenu

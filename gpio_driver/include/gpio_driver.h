@@ -4,6 +4,7 @@
 #ifndef _GPIO_DRIVER_H_
 #define _GPIO_DRIVER_H_
 
+#include <driver/gpio.h>
 #include "driver/rtc_io.h"
 #include "esp_bit_defs.h"
 #include "hal/gpio_hal.h"
@@ -11,6 +12,11 @@
 #include "soc/rtc_io_periph.h"
 #include "soc/rtc_io_struct.h"
 #include "soc/soc.h"
+
+typedef enum {
+    GPIO_STATE_LOW = 0,
+    GPIO_STATE_HIGH = 1
+} gpio_drv_state_t;
 
 /**
  * @brief Type of GPIO IO MCU config (IO_MUX_x_REGx or RTCIO)
@@ -93,11 +99,52 @@ bool gpio_drv_is_pin_reserved(gpio_num_t gpio_num);
 */
 uint64_t gpio_drv_get_reservations(void);
 
+/**
+ * @brief Fill gpio_pin_io_config_t with current io pin configuration
+ * 
+ * @param[out] pin_io_config GPIO pin io configuration
+*/
 void gpio_drv_get_pin_io_config(gpio_pin_io_config_t *pin_io_config);
+
+/**
+ * @brief Check one GPIO for reservation status
+ * 
+ * @param[in] gpio_num GPIO_NUM_XX
+ * @return 
+ *      - Input signal connected to gpio_num
+ *      - SIG_GPIO_OUT_IDX if not signal connected ( simple GPIO )
+*/
 uint32_t gpio_drv_get_in_signal(gpio_num_t gpio_num);
+
 #ifdef CONFIG_GPIO_TEXT_FUNCTIONS
+/**
+ * @brief Get signal name as null terminated string
+ * 
+ * @param[in] signal In or Out signal index
+ * @param[in] is_input True/False for Input/Output signal
+ * @return 
+ *      - Pointer to string
+*/
 char *gpio_drv_get_sig_name(uint32_t signal, bool is_input);
+
+/**
+ * @brief Get IOMUX Function name
+ * 
+ * @param[in] function IOMUX function selected
+ * @param[in] gpio_num Direct connected GPIO_NUM_XX
+ * @return 
+ *      - Pointer to string
+*/
 char *gpio_drv_get_iomux_func_name(uint32_t function, gpio_num_t gpio_num);
+
+/**
+ * @brief Get friendly pin io configuration description as null terminated string
+ * 
+ * @param[in] gpio_num GPIO_NUM_XX
+ * @param[in] short_desc True/False for Short/Long description
+ * @return 
+ *      - Pointer to string
+*/
 char *gpio_drv_get_io_description(gpio_num_t gpio_num, bool short_desc);
 #endif /* CONFIG_GPIO_TEXT_FUNCTIONS */
 #endif /* _GPIO_DRIVER_H_ */
